@@ -69,7 +69,7 @@ const STRINGS = {
   'blacklist.empty': { zh: '📃 黑名单为空。', en: '📃 Blacklist is empty.' },
   'blacklist.title': { zh: '📃 <b>黑名单</b> (共 {n} 人)', en: '📃 <b>Blacklist</b> ({n} users)' },
   'clear.user.done': { zh: '🗑 已清除用户 <code>{uid}</code> 的消息映射与话题绑定。', en: '🗑 Cleared message mappings and topic binding for user <code>{uid}</code>.' },
-  'clear.all.done': { zh: '🗑 已清空全部消息映射、话题绑定与置顶卡片记录。', en: '🗑 Cleared all message mappings, topic bindings and pinned-card records.' },
+  'clear.all.done': { zh: '🗑 已清空全部消息映射、话题绑定与历史卡片记录。', en: '🗑 Cleared all message mappings, topic bindings and legacy card records.' },
   'pin.card': {
     zh: '🪪 <b>新用户接入</b>\n昵称: {name}\n用户名: {username}\nUserID: <code>{uid}</code>\n发起时间: {time}',
     en: '🪪 <b>New user</b>\nName: {name}\nUsername: {username}\nUserID: <code>{uid}</code>\nFirst seen: {time}'
@@ -539,8 +539,6 @@ function copyMessage(bot, msg = {}) { return requestTelegram(bot, 'copyMessage',
 function createForumTopic(bot, chat_id, name) { return requestTelegram(bot, 'createForumTopic', makeReqBody({ chat_id, name })); }
 function answerCallbackQuery(bot, callback_query_id, text, show_alert = false) { return requestTelegram(bot, 'answerCallbackQuery', makeReqBody({ callback_query_id, text, show_alert })); }
 function deleteMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'deleteMessage', makeReqBody({ chat_id, message_id })); }
-function pinMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'pinChatMessage', makeReqBody({ chat_id, message_id })); }
-function unpinMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'unpinChatMessage', makeReqBody({ chat_id, message_id })); }
 function editMessageText(bot, msg = {}) { return requestTelegram(bot, 'editMessageText', makeReqBody(msg)); }
 
 function escapeHtml(s) {
@@ -902,9 +900,9 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
         const errDesc = topicRes.description || 'Unknown error';
         const kicked = /kicked|not a member|chat not found/i.test(errDesc);
         const hint = kicked ? t(bot, 'topic.hint.kicked') : t(bot, 'topic.hint.perm');
-        // bot 被移出群组时发群会失败，直接发管理员私聊
+        // 系统报错只发管理员私聊，不污染群组
         await sendMessage(bot, {
-          chat_id: kicked ? bot.adminUid : (bot.supergroupId || bot.adminUid),
+          chat_id: bot.adminUid,
           text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
           parse_mode: 'HTML'
         });
@@ -936,7 +934,7 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
         .bind(bot.id, String(chatId), topicId).run();
       forwardBody.message_thread_id = parseInt(topicId);
       forwardReq = await copyMessage(bot, forwardBody);
-      // 新话题：重置信息卡标记，稍后重新发置顶卡
+      // 新话题：重置信息卡标记，稍后重新发信息卡
       await setUserState(bot, chatId, { first_card_sent: 0 });
     }
   }
@@ -949,10 +947,10 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
 
     if (!state.first_card_sent) {
       if (bot.topicMode && topicId) {
-        // 话题模式：首次接入或话题重建后 -> 话题内置顶信息卡
+        // 话题模式：首次接入或话题重建后 -> 话题内信息卡
         await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
       } else if (!bot.topicMode && !topicId) {
-        // 私聊模式首次消息 -> 管理员私聊置顶信息卡
+        // 私聊模式首次消息 -> 管理员私聊信息卡
         await sendFirstCard(bot, { chatId, message, topicMode: false });
       }
     }
@@ -984,13 +982,13 @@ async function deliverPendingForward(bot, chatId, state) {
   await forwardGuestMessage(bot, chatId, fakeMessage, freshState, now);
 }
 
-// 首次置顶信息卡：昵称/用户名/UserID/发起时间；发新卡前自动 unpin 上一张。
+// 首次信息卡：昵称/用户名/UserID/发起时间（不置顶，仅发送）
 async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }) {
   try {
     const state = await getUserState(bot, chatId);
     if (state.first_card_sent) return;
 
-    // 给管理员端发置顶信息卡
+    // 给管理员端发信息卡
     const targetChat = topicMode ? bot.supergroupId : bot.adminUid;
     const body = {
       chat_id: targetChat,
@@ -1006,14 +1004,6 @@ async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }
 
     const res = await sendMessage(bot, body);
     if (res.ok) {
-      const msgId = res.result.message_id;
-      const pinKey = topicMode ? `pin:topic:${topicId}` : 'pin:private';
-      const prev = await settingGet(bot, pinKey);
-      if (prev) {
-        try { await unpinMessage(bot, targetChat, parseInt(prev)); } catch (e) { /* 旧消息可能已删除 */ }
-      }
-      await pinMessage(bot, targetChat, msgId);
-      await settingSet(bot, pinKey, String(msgId));
       await setUserState(bot, chatId, { first_card_sent: 1 });
     }
   } catch (e) {
