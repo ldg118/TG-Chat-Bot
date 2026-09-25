@@ -901,10 +901,10 @@ async function handleGuestMessage(bot, message) {
   const chatId = message.chat.id;
 
   // 陌生人发送管理员指令（如 /admin、/bot list）：指令不会执行，也不转发到群组/话题。
-  // 提示本身也是一次 Telegram 调用，若每条都回复会被滥用刷接口，故同一用户 10 分钟内只提示一次，
-  // 期间重复发送静默忽略；提前返回同时省掉后续的 D1 查询。
+  // 提示本身也是一次 Telegram 调用，若每条都回复会被滥用刷接口，故同一机器人下的同一用户
+  // 10 分钟内只提示一次，期间重复发送静默忽略；提前返回同时省掉后续的 D1 查询。
   if (message.text && isAdminCommandText(message.text)) {
-    const key = String(chatId);
+    const key = `${bot.id}:${chatId}`;
     const last = cmdHintCooldown.get(key) || 0;
     if (Date.now() - last >= CMD_HINT_COOLDOWN * 1000) {
       if (cmdHintCooldown.size > 10000) cmdHintCooldown.clear();
