@@ -47,9 +47,9 @@ const STRINGS = {
     en: '⚠️ <b>Config warning</b>: topic mode is on but supergroup id (sg) is not set. Fill sg in ENV_BOTS or ENV_SUPERGROUP_ID (starts with -100), or send <code>/mode private</code>.'
   },
   'verify.title': { zh: '🔒 <b>身份验证</b>', en: '🔒 <b>Verification</b>' },
-  'verify.math_text': { zh: '问题：{q}\n\n(验证通过后请重新发送刚才的消息)', en: 'Question: {q}\n\n(Please resend your message after verification)' },
-  'verify.custom_text': { zh: '请回答以下问题以继续：\n\n{q}\n\n直接回复答案文本即可（验证通过后请重新发送刚才的消息）', en: 'Please answer the following to continue:\n\n{q}\n\nReply with the answer text (resend your message after verification)' },
-  'verify.passed': { zh: '✅ <b>验证通过！</b>\n\n请重新发送您的消息。', en: '✅ <b>Verification passed!</b>\n\nPlease resend your message.' },
+  'verify.math_text': { zh: '问题：{q}\n\n(验证通过后您的消息将自动发送)', en: 'Question: {q}\n\n(Your message will be sent automatically after verification)' },
+  'verify.custom_text': { zh: '请回答以下问题以继续：\n\n{q}\n\n直接回复答案文本即可（验证通过后您的消息将自动发送）', en: 'Please answer the following to continue:\n\n{q}\n\nReply with the answer text (your message will be sent automatically after verification)' },
+  'verify.passed': { zh: '✅ <b>验证通过！</b>\n\n您的消息已发送。', en: '✅ <b>Verification passed!</b>\n\nYour message has been sent.' },
   'verify.wrong': { zh: '❌ 答案错误，请重试。', en: '❌ Wrong answer, please try again.' },
   'verify.expired': { zh: '❌ 验证已过期，请重新发送消息触发验证。', en: '❌ Verification expired. Resend a message to trigger it again.' },
   'verify.custom_notset': { zh: '⚠️ 管理员尚未设置自定义验证问题，已临时按算术题验证。', en: '⚠️ Custom question not configured; using math challenge instead.' },
@@ -288,6 +288,7 @@ async function createTables(db) {
     pending_code_expiry INTEGER DEFAULT 0,
     pending_attempts INTEGER DEFAULT 0,
     pending_msg_id INTEGER DEFAULT 0,
+    pending_forward TEXT,
     first_card_sent INTEGER DEFAULT 0,
     PRIMARY KEY (bot_id, chat_id)
   )`).run();
@@ -365,8 +366,13 @@ async function doEnsureTables(db) {
   }
   // 为已存在的表补充后续新增的列
   const usInfo = await db.prepare('PRAGMA table_info(user_states)').all();
-  if (usInfo.results.length && !usInfo.results.some(c => c.name === 'pending_msg_id')) {
-    await db.exec('ALTER TABLE user_states ADD COLUMN pending_msg_id INTEGER DEFAULT 0');
+  if (usInfo.results.length) {
+    if (!usInfo.results.some(c => c.name === 'pending_msg_id')) {
+      await db.exec('ALTER TABLE user_states ADD COLUMN pending_msg_id INTEGER DEFAULT 0');
+    }
+    if (!usInfo.results.some(c => c.name === 'pending_forward')) {
+      await db.exec('ALTER TABLE user_states ADD COLUMN pending_forward TEXT');
+    }
   }
 }
 
@@ -391,6 +397,7 @@ async function getUserState(bot, chatId) {
     bot_id: bot.id, chat_id: String(chatId), is_blocked: 0, is_trusted: 0, is_verified: 0, verified_expiry: 0,
     is_rate_limited: 0, message_count: 0, window_start: 0,
     pending_question: null, pending_answer: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0,
+    pending_forward: null,
     first_card_sent: 0
   };
   await bot.db.prepare(`INSERT INTO user_states (bot_id, chat_id, is_blocked, is_trusted, is_verified, verified_expiry,
@@ -762,6 +769,7 @@ async function handleGuestMessage(bot, message) {
           is_rate_limited: 0, message_count: 0, window_start: 0
         });
         await sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.passed'), parse_mode: 'HTML' });
+        await deliverPendingForward(bot, chatId, state);
         return new Response('Ok');
       } else {
         const attempts = (state.pending_attempts || 0) + 1;
@@ -820,7 +828,13 @@ async function handleGuestMessage(bot, message) {
 
   // 5. 被拦截 -> 验证挑战
   if (!allowed) {
-    return sendVerificationChallenge(bot, chatId, message.message_id);
+    // 暂存被拦截的消息，验证通过后自动补转发，用户无需重发
+    return sendVerificationChallenge(bot, chatId, message.message_id, {
+      message_id: message.message_id,
+      first_name: message.chat.first_name || '',
+      last_name: message.chat.last_name || '',
+      username: message.chat.username || ''
+    });
   }
 
   // 6. 放行 -> 关键词/去重检查（仅文本，trusted 豁免）
@@ -837,6 +851,11 @@ async function handleGuestMessage(bot, message) {
       .bind(bot.id, hash, now + DEDUPE_TTL_SECONDS).run();
   }
 
+  return forwardGuestMessage(bot, chatId, message, state, now);
+}
+
+// 转发用户消息到管理端（话题/私聊模式通用），供正常流程与验证后补发复用
+async function forwardGuestMessage(bot, chatId, message, state, now) {
   let topicId = null;
   let forwardChatId = bot.adminUid;
 
@@ -881,7 +900,7 @@ async function handleGuestMessage(bot, message) {
     }
   }
 
-  // 7. 转发（copyMessage 穿透隐私设置）
+  // 转发（copyMessage 穿透隐私设置）
   const forwardBody = {
     chat_id: forwardChatId,
     from_chat_id: chatId,
@@ -935,6 +954,24 @@ async function handleGuestMessage(bot, message) {
   }
 }
 
+// 验证通过后补转发暂存的消息
+async function deliverPendingForward(bot, chatId, state) {
+  if (!state.pending_forward) return;
+  let stash = null;
+  try { stash = JSON.parse(state.pending_forward); } catch (e) { /* ignore */ }
+  await setUserState(bot, chatId, { pending_forward: null });
+  if (!stash || !stash.message_id) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  const fakeMessage = {
+    message_id: stash.message_id,
+    text: null,
+    chat: { id: Number(chatId) || chatId, first_name: stash.first_name || '', last_name: stash.last_name || '', username: stash.username || '' }
+  };
+  const freshState = await getUserState(bot, chatId);
+  await forwardGuestMessage(bot, chatId, fakeMessage, freshState, now);
+}
+
 // 首次置顶信息卡：昵称/用户名/UserID/发起时间；发新卡前自动 unpin 上一张。
 async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }) {
   try {
@@ -974,15 +1011,15 @@ async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }
 
 // ---------------- 验证逻辑 ----------------
 
-async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
+async function sendVerificationChallenge(bot, chatId, pendingMsgId, stash = null) {
   const now = Math.floor(Date.now() / 1000);
 
   // 原子占位：并发请求中只有一个能成功 claim（解决连发消息重复弹卡竞态）
   const claim = await bot.db.prepare(
-    `UPDATE user_states SET pending_code_expiry = ?, pending_answer = 'CLAIMED'
+    `UPDATE user_states SET pending_code_expiry = ?, pending_answer = 'CLAIMED', pending_forward = ?
      WHERE bot_id = ? AND chat_id = ?
        AND (pending_answer IS NULL OR pending_answer = '' OR pending_code_expiry <= ?)`
-  ).bind(now + CODE_TTL_SECONDS, bot.id, String(chatId), now).run();
+  ).bind(now + CODE_TTL_SECONDS, stash ? JSON.stringify(stash) : null, bot.id, String(chatId), now).run();
   if (!claim.meta.changes) {
     // 已有验证卡在等待作答（或并发请求已占位），不重复发送
     return new Response('Ok');
@@ -1112,6 +1149,7 @@ async function handleCallback(bot, callbackQuery) {
       text: t(bot, 'verify.passed'),
       parse_mode: 'HTML'
     }));
+    await deliverPendingForward(bot, chatId, state);
     return answerCallbackQuery(bot, callbackQuery.id, '✅');
   } else {
     const attempts = (state.pending_attempts || 0) + 1;
