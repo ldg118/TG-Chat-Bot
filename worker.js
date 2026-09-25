@@ -166,8 +166,16 @@ const STRINGS = {
   },
   'map.notfound': { zh: '⚠️ 无法找到该消息的原始发送者 (可能已被清除)', en: '⚠️ Original sender not found for this message (mapping cleared?)' },
   'topic.create_fail': {
-    zh: '⚠️ <b>话题创建失败</b>\nUID: {uid}\nError: {err}\n\n请检查机器人是否为群组管理员，且拥有"管理话题"权限。',
-    en: '⚠️ <b>Topic creation failed</b>\nUID: {uid}\nError: {err}\n\nEnsure the bot is a group admin with "Manage Topics" permission.'
+    zh: '⚠️ <b>话题创建失败</b>\nUID: {uid}\nError: {err}\n\n{hint}',
+    en: '⚠️ <b>Topic creation failed</b>\nUID: {uid}\nError: {err}\n\n{hint}'
+  },
+  'topic.hint.kicked': {
+    zh: '机器人不在该群组中（或群组 ID 已变更）。\n请确认 sg/ENV_SUPERGROUP_ID 指向当前群组的最新 ID（以 -100 开头），并将机器人重新拉入群设为管理员（需"管理话题"权限）。',
+    en: 'The bot is not in this group (or the group ID changed).\nVerify sg/ENV_SUPERGROUP_ID matches the current group id (starts with -100), and re-add the bot as admin with "Manage Topics" permission.'
+  },
+  'topic.hint.perm': {
+    zh: '请检查机器人是否为群组管理员，且拥有"管理话题"权限。',
+    en: 'Ensure the bot is a group admin with "Manage Topics" permission.'
   },
   'forward.fail': { zh: '❌ <b>消息转发失败</b>\n目标 UID: {uid}\n原因: {err}', en: '❌ <b>Forward failed</b>\nTarget UID: {uid}\nReason: {err}' },
   'broadcast.usage': { zh: '⚠️ <b>使用错误</b>\n\n请回复一条您想要广播的消息，并输入 <code>/broadcast</code>', en: '⚠️ <b>Usage error</b>\n\nReply to a message you want to broadcast with <code>/broadcast</code>' },
@@ -891,9 +899,13 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
         await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
       } else {
         console.error('Create topic failed:', JSON.stringify(topicRes));
+        const errDesc = topicRes.description || 'Unknown error';
+        const kicked = /kicked|not a member|chat not found/i.test(errDesc);
+        const hint = kicked ? t(bot, 'topic.hint.kicked') : t(bot, 'topic.hint.perm');
+        // bot 被移出群组时发群会失败，直接发管理员私聊
         await sendMessage(bot, {
-          chat_id: bot.supergroupId,
-          text: t(bot, 'topic.create_fail', { uid: chatId, err: topicRes.description || 'Unknown error' }),
+          chat_id: kicked ? bot.adminUid : (bot.supergroupId || bot.adminUid),
+          text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
           parse_mode: 'HTML'
         });
       }
