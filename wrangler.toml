@@ -1,0 +1,38 @@
+name = "telegram-mirrotalk"
+main = "worker.js"
+compatibility_date = "2023-10-30"
+
+# D1 database binding (replaces the old KV namespace).
+# Create it with: wrangler d1 create mirrotalk
+# then paste the returned database_id below. Tables are created automatically
+# on first request (no manual migration needed).
+[[d1_databases]]
+binding = "DB"
+database_name = "mirrotalk"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# Daily cleanup of expired dedupe hashes (UTC).
+[triggers]
+crons = ["0 0 * * *"]
+
+[vars]
+# --- Single-bot (legacy) config: treated as bot id "default", webhook path /endpoint ---
+ENV_BOT_TOKEN = ""
+ENV_BOT_SECRET = ""
+ENV_ADMIN_UID = ""
+ENV_ENABLE_TOPIC_GROUP = "false"
+ENV_SUPERGROUP_ID = ""
+ENV_MAX_MSG_PER_MIN = 40
+
+# --- Multi-bot config (optional, overrides the single-bot vars above) ---
+# JSON array. Each entry:
+#   id     : webhook path tag -> /endpoint/{id}   (letters, digits, - _)
+#   token  : bot token from @BotFather            (required)
+#   admin  : admin Telegram user ID               (required)
+#   sg     : supergroup id (-100xxx), topic mode  (optional)
+#   topic  : enable topic-group mode by default   (optional)
+#   max    : rate limit msgs/min, default 40      (optional)
+#   secret : webhook secret token, optional       (optional)
+# Register each bot's webhook by visiting:
+#   https://<worker-domain>/registerWebhook/{id}
+# ENV_BOTS = '[{"id":"default","token":"123:ABC","admin":"111111"},{"id":"support","token":"456:DEF","admin":"222222","sg":"-100xxx","topic":true,"max":40}]'
