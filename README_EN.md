@@ -62,7 +62,12 @@ One Worker can serve multiple bots at the same time, sharing a single D1 databas
 
 ### Adding a second, third bot?
 
-Set one environment variable `ENV_BOTS` to a JSON array listing all bots:
+Set one environment variable `ENV_BOTS` to a JSON array listing all bots.
+
+**How to enter it in Cloudflare:** Worker → Settings → Variables and Secrets → add variable:
+- **Key**: `ENV_BOTS`
+- **Value**: the **entire JSON array** (all bots in one variable — do NOT create one variable per bot). Enable the "Secret" toggle since the value contains bot tokens.
+- Check **Production**, save, and redeploy
 
 ```json
 [
@@ -70,6 +75,8 @@ Set one environment variable `ENV_BOTS` to a JSON array listing all bots:
   {"id":"support","token":"654321:XYZ-GHI...","admin":"222222222","sg":"-1001234567890","topic":true,"max":40}
 ]
 ```
+
+> JSON notes: keep all double quotes, no trailing commas.
 
 **Field reference:**
 
