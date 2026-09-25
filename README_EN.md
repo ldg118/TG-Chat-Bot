@@ -132,6 +132,7 @@ Use `/bot` commands inside the admin panel (`/admin`) — configs are stored in 
 3.  **Security Levels** (apply to unverified users only):
     - **Strict (1)**: cannot send anything. **Standard (2)**: text only, no media (default). **Relaxed (3)**: no verification.
 4.  **Shadowban**: `/block` drops a user's messages silently; they won't know.
+5.  **Command Abuse Guard**: admin commands (`/admin`, `/bot`, `/help`, …) only work for the admin. When a stranger sends one it is **not executed and not forwarded** to the group/topic. The stranger gets a short hint ("this command is admin-only; just send your message to reach the admin"), throttled to **once per user per 10 minutes** — repeats are silently ignored, so the hint can't be used to flood the API. The command menu is visible to all private-chat users (Telegram can't hide it per user), and this guard covers accidental taps.
 
 ## Admin Commands
 

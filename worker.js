@@ -15,6 +15,7 @@ const VERIFY_TTL_SECONDS = 3600; // 验证通过后 1 小时内免重复验证
 const CODE_TTL_SECONDS = 300;    // 验证码/题目有效期 5 分钟
 const MAX_VERIFY_ATTEMPTS = 3;   // 同一轮验证允许答错的次数，超限需重新发消息触发
 const MAX_CUSTOM_ITEMS = 20;     // 自定义问答题库条数上限
+const CMD_HINT_COOLDOWN = 600;   // 非管理员指令提示的冷却时间（秒），期间重复发送静默忽略
 const DEDUPE_TTL_SECONDS = 120; // 去重哈希 2 分钟过期（仅防短时刷屏，正常复述/确认不受影响）
 const TOPIC_CREATE_COOLDOWN = 600; // 同一用户建话题失败后冷却 10 分钟（防群级限流）
 const DEFAULT_LANG = 'zh';
@@ -55,6 +56,10 @@ const STRINGS = {
   'verify.expired': { zh: '❌ 验证已过期，请重新发送消息触发验证。', en: '❌ Verification expired. Resend a message to trigger it again.' },
   'verify.custom_notset': { zh: '⚠️ 管理员尚未设置自定义验证问题，已临时按算术题验证。', en: '⚠️ Custom question not configured; using math challenge instead.' },
   'rate.limited': { zh: '⚠️ 发送过于频繁，请完成验证后继续。', en: '⚠️ Too many messages. Please complete verification to continue.' },
+  'cmd.admin_only': {
+    zh: '⛔ 该指令仅管理员可用。\n\n如需联系管理员，请直接发送你的消息。',
+    en: '⛔ This command is admin-only.\n\nTo reach the admin, just send your message directly.'
+  },
   'block.done': { zh: '🚫 <b>已屏蔽用户</b>\n用户 <code>{uid}</code> 已进入黑名单并清除信任状态。', en: '🚫 <b>User blocked</b>\nUser <code>{uid}</code> is blacklisted and trust cleared.' },
   'unblock.done': { zh: '✅ <b>已解除屏蔽</b>\n用户 <code>{uid}</code> 已恢复正常状态。', en: '✅ <b>User unblocked</b>\nUser <code>{uid}</code> is restored to normal.' },
   'trust.done': { zh: '🌟 <b>已设置永久信任</b>\n用户 <code>{uid}</code> 将免除验证并移出黑名单。', en: '🌟 <b>Trusted</b>\nUser <code>{uid}</code> skips all checks and is removed from blacklist.' },
@@ -230,6 +235,8 @@ let WORKER_ORIGIN = '';
 const processedMessages = new Set();
 const processedCallbacks = new Set();
 const topicCreationLocks = new Map();
+// 非管理员指令提示的冷却记录（chatId -> 上次提示时间戳），仅存实例内存，避免为提示增加 D1 往返
+const cmdHintCooldown = new Map();
 
 // 构建带机器人上下文与已加载配置的 bot 对象。优先读 D1 bots 表（面板管理），回退到 default 独立变量。
 async function resolveBot(env, botId) {
@@ -674,6 +681,20 @@ const BOT_COMMANDS = [
   { command: 'start', description: '开始 / Start' }
 ];
 
+// 仅管理员可用的指令名。非管理员（陌生人）发出这些指令时静默忽略：
+// 指令本身不会执行（入口已按身份分流），但若不拦下会被当作普通消息转发到话题/群组造成噪音。
+// 注意：需与 dispatchAdminCommand 的指令列表保持一致；start 是用户指令，不在此列。
+const ADMIN_ONLY_COMMANDS = new Set([
+  'help', 'admin', 'mode', 'info', 'trust', 'untrust', 'block', 'unblock', 'blacklist',
+  'clear', 'welcome', 'security', 'verify', 'math', 'keyword', 'lang', 'broadcast', 'bot'
+]);
+
+// 文本是否为管理员指令（支持 /cmd、/cmd@botname、/cmd 参数 三种形式）
+function isAdminCommandText(text) {
+  const m = /^\/([A-Za-z_]+)(?:@[A-Za-z0-9_]+)?(?:\s|$)/.exec(text.trim());
+  return !!(m && ADMIN_ONLY_COMMANDS.has(m[1].toLowerCase()));
+}
+
 // ---------------- 路由入口 ----------------
 
 export default {
@@ -878,6 +899,21 @@ async function handleAdminMessage(bot, message) {
 
 async function handleGuestMessage(bot, message) {
   const chatId = message.chat.id;
+
+  // 陌生人发送管理员指令（如 /admin、/bot list）：指令不会执行，也不转发到群组/话题。
+  // 提示本身也是一次 Telegram 调用，若每条都回复会被滥用刷接口，故同一用户 10 分钟内只提示一次，
+  // 期间重复发送静默忽略；提前返回同时省掉后续的 D1 查询。
+  if (message.text && isAdminCommandText(message.text)) {
+    const key = String(chatId);
+    const last = cmdHintCooldown.get(key) || 0;
+    if (Date.now() - last >= CMD_HINT_COOLDOWN * 1000) {
+      if (cmdHintCooldown.size > 10000) cmdHintCooldown.clear();
+      cmdHintCooldown.set(key, Date.now());
+      await sendMessage(bot, { chat_id: chatId, text: t(bot, 'cmd.admin_only'), parse_mode: 'HTML' });
+    }
+    return new Response('Ok');
+  }
+
   const now = Math.floor(Date.now() / 1000);
   // 用户状态 / 关键词 / 去重哈希三个读操作互不依赖，并行执行省两次串行往返
   const textHash = message.text ? await sha256(message.text.trim()) : null;
