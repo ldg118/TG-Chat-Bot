@@ -44,20 +44,50 @@
 
 ## 多机器人支持
 
-同一个 Worker 可挂多个机器人，共享同一个 D1（数据按 bot 隔离）。配置 `ENV_BOTS` 环境变量（JSON 数组）：
+一个 Worker 可以同时挂多个机器人，共用同一个 D1 数据库，**每个机器人的数据完全隔离**（黑名单、关键词、验证状态、消息映射、配置等都按 bot 分开，互不影响）。
+
+### 只有一个机器人？
+
+**什么都不用配。** 直接沿用单机器人变量 `ENV_BOT_TOKEN`、`ENV_ADMIN_UID` 等即可，系统会自动把它当作 id 为 `default` 的机器人，webhook 路径仍是 `/endpoint`，与旧版行为完全一致。
+
+### 要加第二个、第三个机器人？
+
+只需设置一个环境变量 `ENV_BOTS`，值为 JSON 数组，列出所有机器人：
 
 ```json
 [
-  {"id":"default","token":"123:ABC","admin":"111111"},
-  {"id":"support","token":"456:DEF","admin":"222222","sg":"-100xxx","topic":true,"max":40}
+  {"id":"default","token":"123456:ABC-DEF...","admin":"111111111"},
+  {"id":"support","token":"654321:XYZ-GHI...","admin":"222222222","sg":"-1001234567890","topic":true,"max":40}
 ]
 ```
 
-- `id`：webhook 路径标识，对应 `/endpoint/{id}`
-- `token`/`admin`：必填；`sg`/`topic`/`max`/`secret`：可选
-- 每个 bot 注册 webhook：访问 `https://你的-worker域名/registerWebhook/{id}`
-- 不设置 `ENV_BOTS` 时，自动使用旧的单 bot 变量（`ENV_BOT_TOKEN` 等），行为不变
-- 每个 bot 的安全级别、验证方式、关键词、语言、欢迎语等配置相互独立
+**每个字段的含义：**
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 机器人标识，只能用小写字母/数字/`-`/`_`。决定 webhook 路径 `/endpoint/{id}` |
+| `token` | 是 | 从 @BotFather 获取的 Bot Token |
+| `admin` | 是 | 该机器人的管理员 Telegram User ID |
+| `sg` | 否 | 超级群组 ID（以 `-100` 开头），仅话题模式需要 |
+| `topic` | 否 | `true` 则默认开启话题群组模式，默认 `false`（私聊模式）。运行后可用 `/mode` 切换 |
+| `max` | 否 | 频率限制（条/分钟），超限触发重新验证，默认 `40` |
+| `secret` | 否 | Webhook 安全密钥；留空则自动生成并存入 D1 |
+
+**添加新机器人的完整步骤：**
+
+1. 从 @BotFather 新建一个 bot，拿到 token
+2. 在 Cloudflare 里编辑 `ENV_BOTS`，往数组里加一条（含 `id`、`token`、`admin`）
+3. 部署 / 保存
+4. 访问 `https://你的-worker域名/registerWebhook/{新id}` 注册该机器人的 webhook
+   （例如 `.../registerWebhook/support`）
+5. 完成。这个新机器人会用自己的 D1 空间，与旧机器人互不干扰
+
+**几个注意点：**
+
+- 每个机器人**单独注册** webhook：`default` 用 `/registerWebhook`，其余用 `/registerWebhook/{id}`
+- `ENV_BOTS` 和旧的单机器人变量可以同时存在：数组里定义了的以数组为准；数组里**没有** `default` 条目时，旧变量会自动补位成 `default`
+- 改了 `ENV_BOTS` 里某个机器人的 `token`/`admin` 后，需要重新访问它的 `registerWebhook` 地址让配置生效
+- 管理员指令（`/admin`、`/block` 等）在每个机器人里独立可用，作用于该机器人自己的用户
 
 ## 运行模式
 

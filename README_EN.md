@@ -54,20 +54,50 @@ Create a D1 database (e.g. `mirrotalk`) and put its `database_id` in the `[[d1_d
 
 ## Multi-Bot Support
 
-One Worker can serve multiple bots sharing a single D1 (data isolated per bot). Set the `ENV_BOTS` env var (JSON array):
+One Worker can serve multiple bots at the same time, sharing a single D1 database. **Each bot's data is fully isolated** (blacklist, keywords, verification state, message mappings, settings — all kept separate per bot, no interference).
+
+### Only one bot?
+
+**Nothing to configure.** Just keep using the single-bot vars (`ENV_BOT_TOKEN`, `ENV_ADMIN_UID`, etc.). The system treats it as a bot with id `default`, the webhook path stays `/endpoint`, and behavior is identical to the old version.
+
+### Adding a second, third bot?
+
+Set one environment variable `ENV_BOTS` to a JSON array listing all bots:
 
 ```json
 [
-  {"id":"default","token":"123:ABC","admin":"111111"},
-  {"id":"support","token":"456:DEF","admin":"222222","sg":"-100xxx","topic":true,"max":40}
+  {"id":"default","token":"123456:ABC-DEF...","admin":"111111111"},
+  {"id":"support","token":"654321:XYZ-GHI...","admin":"222222222","sg":"-1001234567890","topic":true,"max":40}
 ]
 ```
 
-- `id`: webhook path tag -> `/endpoint/{id}`
-- `token`/`admin`: required; `sg`/`topic`/`max`/`secret`: optional
-- Register each bot's webhook: visit `https://<worker-domain>/registerWebhook/{id}`
-- Without `ENV_BOTS`, the legacy single-bot vars (`ENV_BOT_TOKEN` etc.) are used as bot id `default`
-- Security level, verification, keywords, language and welcome messages are independent per bot
+**Field reference:**
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | Yes | Bot identifier, lowercase letters/digits/`-`/`_` only. Determines webhook path `/endpoint/{id}` |
+| `token` | Yes | Bot Token from @BotFather |
+| `admin` | Yes | This bot's admin Telegram User ID |
+| `sg` | No | Supergroup ID (starts with `-100`), only needed for topic mode |
+| `topic` | No | `true` enables topic-group mode by default, else `false` (private mode). Switchable at runtime via `/mode` |
+| `max` | No | Rate limit (msgs/min); exceeding it forces re-verification. Default `40` |
+| `secret` | No | Webhook secret token; auto-generated and stored in D1 if left empty |
+
+**Steps to add a new bot:**
+
+1. Create a new bot at @BotFather, get its token
+2. Edit `ENV_BOTS` in Cloudflare, append an entry (with `id`, `token`, `admin`)
+3. Deploy / save
+4. Visit `https://<worker-domain>/registerWebhook/{new-id}` to register that bot's webhook
+   (e.g. `.../registerWebhook/support`)
+5. Done. The new bot uses its own D1 space, fully separate from existing bots
+
+**Notes:**
+
+- Each bot registers its webhook **separately**: `default` uses `/registerWebhook`, others use `/registerWebhook/{id}`
+- `ENV_BOTS` and the legacy single-bot vars can coexist: entries defined in the array take precedence; if the array has **no** `default` entry, the old vars auto-fill as `default`
+- After changing a bot's `token`/`admin` in `ENV_BOTS`, re-visit its `registerWebhook` URL for the change to take effect
+- Admin commands (`/admin`, `/block`, etc.) work independently in each bot, acting on that bot's own users
 
 ## Operating Modes
 
