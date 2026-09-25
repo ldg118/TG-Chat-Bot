@@ -74,19 +74,6 @@ const STRINGS = {
     zh: '🪪 <b>新用户接入</b>\n昵称: {name}\n用户名: {username}\nUserID: <code>{uid}</code>\n发起时间: {time}',
     en: '🪪 <b>New user</b>\nName: {name}\nUsername: {username}\nUserID: <code>{uid}</code>\nFirst seen: {time}'
   },
-  'notice.default': {
-    zh: '请友善沟通，禁止发送广告、诈骗及违规内容，违规将被屏蔽。',
-    en: 'Be respectful. Ads, scams and prohibited content will get you blocked.'
-  },
-  'notice.user': {
-    zh: '👋 <b>欢迎</b>\n\n{notice}',
-    en: '👋 <b>Welcome</b>\n\n{notice}'
-  },
-  'notice.usage': {
-    zh: '用法: <code>/notice 通知内容</code>\n当前通知:\n{notice}',
-    en: 'Usage: <code>/notice &lt;text&gt;</code>\nCurrent notice:\n{notice}'
-  },
-  'notice.set': { zh: '✅ 接入须知已更新。', en: '✅ Welcome notice updated.' },
   'welcome.usage': {
     zh: '用法: <code>/welcome 欢迎语</code>（可用 <code>{uid}</code> 占位符显示用户ID）\n当前欢迎语:\n{welcome}',
     en: 'Usage: <code>/welcome &lt;text&gt;</code> (use <code>{uid}</code> placeholder)\nCurrent welcome:\n{welcome}'
@@ -151,8 +138,8 @@ const STRINGS = {
     en: '🛠 <b>Admin Panel</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 Keywords {kw} | 🌐 {lang}\n\nTap buttons below to execute; type <code>/</code> for the command menu; <code>/help</code> for the full list.'
   },
   'help.text': {
-    zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|custom 问题|答案|off|show</code> 验证方式\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）\n<code>/notice 文本</code> 用户接入须知\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
-    en: '� <b>Command Reference</b>\n\n<b>Users</b> (reply to their msg or send in their topic)\n<code>/info</code> | <code>/trust</code> | <code>/untrust</code>\n<code>/block</code> | <code>/unblock</code> | <code>/blacklist</code>\n<code>/clear</code> user mappings | <code>/clear all</code>\n\n<b>System</b>\n<code>/mode private|topic</code>\n<code>/security 1|2|3</code> strict|standard|relaxed\n<code>/verify math|custom q|a|off|show</code>\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code>\n<code>/keyword list|add w|del w|reset</code>\n<code>/lang zh|en</code>\n<code>/welcome text</code> (supports {uid})\n<code>/notice text</code>\n\n<b>Bots</b>\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code> | <code>/bot set id token|admin|sg|max value</code>\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg (skips blocked users)'
+    zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|custom 问题|答案|off|show</code> 验证方式\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
+    en: '📖 <b>Command Reference</b>\n\n<b>Users</b> (reply to their msg or send in their topic)\n<code>/info</code> | <code>/trust</code> | <code>/untrust</code>\n<code>/block</code> | <code>/unblock</code> | <code>/blacklist</code>\n<code>/clear</code> user mappings | <code>/clear all</code>\n\n<b>System</b>\n<code>/mode private|topic</code>\n<code>/security 1|2|3</code> strict|standard|relaxed\n<code>/verify math|custom q|a|off|show</code>\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code>\n<code>/keyword list|add w|del w|reset</code>\n<code>/lang zh|en</code>\n<code>/welcome text</code> (supports {uid})\n\n<b>Bots</b>\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code> | <code>/bot set id token|admin|sg|max value</code>\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg (skips blocked users)'
   },
   'bot.usage': {
     zh: '用法:\n<code>/bot list</code> 查看机器人\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加\n<code>/bot del id</code> 删除\n<code>/bot set id token|admin|sg|max 值</code> 修改',
@@ -539,7 +526,6 @@ const BOT_COMMANDS = [
   { command: 'unblock', description: '解除屏蔽 / Unblock' },
   { command: 'blacklist', description: '黑名单 / Blacklist' },
   { command: 'clear', description: '清除映射 / Clear mappings' },
-  { command: 'notice', description: '接入须知 / Welcome notice' },
   { command: 'welcome', description: '用户欢迎语 / Welcome msg' },
   { command: 'mode', description: '切换模式 / Switch mode' },
   { command: 'security', description: '安全级别 / Security level' },
@@ -680,7 +666,6 @@ async function dispatchAdminCommand(bot, text, message) {
   if (text.startsWith('/keyword')) return handleKeywordCommand(bot, message);
   if (text.startsWith('/lang')) return handleLangCommand(bot, message);
   if (text.startsWith('/clear')) return handleClearCommand(bot, message);
-  if (text.startsWith('/notice')) return handleNoticeCommand(bot, message);
   if (text.startsWith('/welcome')) return handleWelcomeCommand(bot, message);
   if (text.startsWith('/bot')) return handleBotCommand(bot, message);
   return undefined;
@@ -896,15 +881,13 @@ async function handleGuestMessage(bot, message) {
   }
 }
 
-// 首次置顶信息卡：昵称/用户名/UserID/发起时间；发新卡前自动 unpin 上一张。同时给用户发接入须知。
+// 首次置顶信息卡：昵称/用户名/UserID/发起时间；发新卡前自动 unpin 上一张。
 async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }) {
   try {
     const state = await getUserState(bot, chatId);
     if (state.first_card_sent) return;
 
-    const notice = (await settingGet(bot, 'config:notification')) || t(bot, 'notice.default');
-
-    // 1. 给管理员端发置顶信息卡
+    // 给管理员端发置顶信息卡
     const targetChat = topicMode ? bot.supergroupId : bot.adminUid;
     const body = {
       chat_id: targetChat,
@@ -917,13 +900,6 @@ async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }
       parse_mode: 'HTML'
     };
     if (topicMode && topicId) body.message_thread_id = parseInt(topicId);
-
-    // 2. 给用户本人发送接入须知
-    await sendMessage(bot, {
-      chat_id: chatId,
-      text: t(bot, 'notice.user', { notice }),
-      parse_mode: 'HTML'
-    });
 
     const res = await sendMessage(bot, body);
     if (res.ok) {
@@ -1363,17 +1339,6 @@ async function handleLangCommand(bot, message) {
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'lang.set'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
-async function handleNoticeCommand(bot, message) {
-  const text = message.text.trim();
-  const content = text.replace(/^\/notice\s*/, '').trim();
-  if (!content) {
-    const cur = (await settingGet(bot, 'config:notification')) || t(bot, 'notice.default');
-    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'notice.usage', { notice: escapeHtml(cur) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
-  }
-  await settingSet(bot, 'config:notification', content);
-  return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'notice.set'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
-}
-
 async function handleWelcomeCommand(bot, message) {
   const text = message.text.trim();
   const content = text.replace(/^\/welcome\s*/, '').trim();
@@ -1409,23 +1374,23 @@ async function showMenuPanel(bot, chatId, threadId, panel, msgId = null) {
       keyboard = [
         [ { text: 'ℹ️ 信息', callback_data: 'cmd:/info' }, { text: '🌟 信任', callback_data: 'cmd:/trust' }, { text: '↩️ 取消信任', callback_data: 'cmd:/untrust' } ],
         [ { text: '🚫 屏蔽', callback_data: 'cmd:/block' }, { text: '✅ 解屏', callback_data: 'cmd:/unblock' } ],
-        [ { text: '📃 黑名单', callback_data: 'cmd:/blacklist' }, { text: '� 清除映射', callback_data: 'cmd:/clear' } ],
+        [ { text: '📃 黑名单', callback_data: 'cmd:/blacklist' }, { text: '🗑 清除映射', callback_data: 'cmd:/clear' } ],
         [ BACK_BTN ]
       ];
       break;
     case 'security':
       keyboard = [
-        [ { text: '� 严格', callback_data: 'cmd:/security 1' }, { text: '🛡 标准', callback_data: 'cmd:/security 2' }, { text: '� 宽松', callback_data: 'cmd:/security 3' } ],
+        [ { text: '🛡 严格', callback_data: 'cmd:/security 1' }, { text: '🛡 标准', callback_data: 'cmd:/security 2' }, { text: '🛡 宽松', callback_data: 'cmd:/security 3' } ],
         [ { text: '🧭 私聊模式', callback_data: 'cmd:/mode private' }, { text: '🧭 话题模式', callback_data: 'cmd:/mode topic' } ],
-        [ { text: '🔐 算术验证', callback_data: 'cmd:/verify math' }, { text: '🔐 关闭验证', callback_data: 'cmd:/verify off' }, { text: '� 验证配置', callback_data: 'cmd:/verify show' } ],
+        [ { text: '🔐 算术验证', callback_data: 'cmd:/verify math' }, { text: '🔐 关闭验证', callback_data: 'cmd:/verify off' }, { text: '🔐 验证配置', callback_data: 'cmd:/verify show' } ],
         [ { text: '🧮 题库配置', callback_data: 'cmd:/math show' } ],
         [ BACK_BTN ]
       ];
       break;
     case 'texts':
       keyboard = [
-        [ { text: '� 关键词列表', callback_data: 'cmd:/keyword list' }, { text: '� 恢复默认词', callback_data: 'cmd:/keyword reset' } ],
-        [ { text: '💬 欢迎语', callback_data: 'cmd:/welcome' }, { text: '📣 接入须知', callback_data: 'cmd:/notice' } ],
+        [ { text: '📃 关键词列表', callback_data: 'cmd:/keyword list' }, { text: '🔄 恢复默认词', callback_data: 'cmd:/keyword reset' } ],
+        [ { text: '💬 欢迎语(查看/设置)', callback_data: 'cmd:/welcome' } ],
         [ { text: '🌐 中文', callback_data: 'cmd:/lang zh' }, { text: '🌐 English', callback_data: 'cmd:/lang en' } ],
         [ BACK_BTN ]
       ];
@@ -1439,7 +1404,7 @@ async function showMenuPanel(bot, chatId, threadId, panel, msgId = null) {
       break;
     default: // main
       keyboard = [
-        [ { text: '� 用户管理', callback_data: 'menu:users' }, { text: '🛡 安全与模式', callback_data: 'menu:security' } ],
+        [ { text: '👥 用户管理', callback_data: 'menu:users' }, { text: '🛡 安全与模式', callback_data: 'menu:security' } ],
         [ { text: '📝 文案与语言', callback_data: 'menu:texts' }, { text: '🤖 机器人管理', callback_data: 'menu:bots' } ],
         [ { text: '📢 广播(回复消息)', callback_data: 'cmd:/broadcast' }, { text: '📖 全部指令', callback_data: 'cmd:/help' } ]
       ];

@@ -185,6 +185,7 @@ Send `/admin` in the Supergroup to see the control panel:
 - **/math ops +-*/** / **/math range 1 9** / **/math count 4** / **/math show**: Configure the math question bank (operators, operand range, option buttons).
 - **/keyword list|add <word>|del <word>|reset**: Manage the keyword blacklist.
 - **/lang <zh|en>**: Switch UI language.
+- **/welcome <text>**: Custom `/start` welcome message (supports `{uid}` placeholder).
 - **/clear**: Clear message mappings for a user (reply to their message or send in their topic); `/clear all` wipes all mappings.
 - **/mode <private|topic>**: Switch operating mode.
 - **/bot list|add|del|set**: Manage multiple bots from the admin panel (stored in D1, webhook auto-registered, no Cloudflare needed).

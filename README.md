@@ -175,6 +175,7 @@
 - **/math ops +-*/** / **/math range 1 9** / **/math count 4** / **/math show**：配置算术题库（运算类型、操作数范围、选项按钮数）。
 - **/keyword list|add 词|del 词|reset**：管理关键词黑名单。
 - **/lang <zh|en>**：切换界面语言。
+- **/welcome 文本**：自定义用户 `/start` 欢迎语（支持 `{uid}` 占位符）。
 - **/clear**：清除指定用户的消息映射（回复其消息或在其话题内发送）；`/clear all` 清空全部映射
 - **/mode <private|topic>**：切换运行模式。
 - **/bot list|add|del|set**：在面板内管理多个机器人（存入 D1 并自动注册 webhook，免 Cloudflare 操作）。
