@@ -124,10 +124,10 @@ Use `/bot` commands inside the admin panel (`/admin`) — configs are stored in 
 
 1.  **Keyword Blacklist**: Messages hitting suspicious keywords are silently dropped. Chinese words match as substrings; ASCII words match on **word boundaries** (case-insensitive) so short words like `av` don't false-positive inside passwords or account names. 12 defaults, managed via `/keyword`.
 2.  **Verification** (pick one):
-    - **Dynamic Math** (default): a randomly generated problem answered via option buttons; operators, range and option count are configurable.
+    - **Dynamic Math** (default): a randomly generated problem answered via option buttons; operators, range and option count are configurable (6 options by default).
     - **Custom Q&A**: an admin-maintained bank of 1–20 questions; the user answers with text and a random question is picked each time. Answers are stored server-side only.
     - **Off**: everyone is verified automatically.
-    - **Wrong answer rotates the question**: the card is refreshed in place with a brand-new question and options; 5 wrong answers in a row require sending a new message.
+    - **Wrong answer rotates the question**: the card is refreshed in place with a brand-new question and options; 3 wrong answers in a row require sending a new message.
     - Once passed, re-verification is skipped for **1 hour**; exceeding `MAX_MSG_PER_MIN` msgs/min forces re-verification. Blocked messages during verification are **stashed** and auto-sent after passing.
 3.  **Security Levels** (apply to unverified users only):
     - **Strict (1)**: cannot send anything. **Standard (2)**: text only, no media (default). **Relaxed (3)**: no verification.
@@ -178,6 +178,8 @@ Every table uses `bot_id` as the first primary-key column to isolate data betwee
 **Automatic cleanup of obsolete tables**: on cold start the Worker compares the actual tables against the list used by the current code and **drops any table not in that list** (including leftover `_old_*` tables from an interrupted migration). Tables prefixed with `sqlite_` / `d1_` are exempt. So obsolete tables from older versions are cleaned automatically — and you should not keep unrelated tables in the same D1 database.
 
 > Maintenance note: when adding a new table, you must also add it to the `TABLES` whitelist at the top of the code, otherwise it will be dropped as obsolete.
+
+**Schema version (performance)**: on cold start the Worker compares `SCHEMA_VERSION` first; when it matches, all table/migration probes are skipped (18 queries → 1). **You must increment `SCHEMA_VERSION` after changing any table structure**, otherwise the new structure will not be applied (it looks like "the code updated but the schema didn't").
 
 ## Installation
 

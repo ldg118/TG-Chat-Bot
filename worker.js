@@ -13,7 +13,7 @@ const DEFAULT_BOT_ID = 'default';
 // --- 常量配置 ---
 const VERIFY_TTL_SECONDS = 3600; // 验证通过后 1 小时内免重复验证
 const CODE_TTL_SECONDS = 300;    // 验证码/题目有效期 5 分钟
-const MAX_VERIFY_ATTEMPTS = 5;   // 同一轮验证允许答错的次数，超限需重新发消息触发
+const MAX_VERIFY_ATTEMPTS = 3;   // 同一轮验证允许答错的次数，超限需重新发消息触发
 const MAX_CUSTOM_ITEMS = 20;     // 自定义问答题库条数上限
 const DEDUPE_TTL_SECONDS = 120; // 去重哈希 2 分钟过期（仅防短时刷屏，正常复述/确认不受影响）
 const TOPIC_CREATE_COOLDOWN = 600; // 同一用户建话题失败后冷却 10 分钟（防群级限流）
@@ -233,9 +233,19 @@ const topicCreationLocks = new Map();
 
 // 构建带机器人上下文与已加载配置的 bot 对象。优先读 D1 bots 表（面板管理），回退到 default 独立变量。
 async function resolveBot(env, botId) {
+  // bots 行与 settings 批量查询合并为一次 D1 往返
+  const keys = ['config:lang', 'config:security_level', 'config:verify_mode', 'config:enable_topic_group',
+    'config:math_ops', 'config:math_min', 'config:math_max', 'config:math_count', 'system:keywords_seeded'];
   let cfg = null;
+  const m = {};
   if (env.D1) {
-    cfg = await env.D1.prepare('SELECT * FROM bots WHERE bot_id = ?').bind(botId).first();
+    const [botRes, setRes] = await env.D1.batch([
+      env.D1.prepare('SELECT * FROM bots WHERE bot_id = ?').bind(botId),
+      env.D1.prepare(`SELECT key, value FROM settings WHERE bot_id = ? AND key IN (${keys.map(() => '?').join(',')})`)
+        .bind(botId, ...keys)
+    ]);
+    cfg = (botRes.results && botRes.results[0]) || null;
+    for (const r of (setRes.results || [])) m[r.key] = r.value;
   }
   if (!cfg) {
     const fromEnv = parseBots(env)[botId];
@@ -264,14 +274,9 @@ async function resolveBot(env, botId) {
     security: DEFAULT_SECURITY_LEVEL,
     verifyMode: 'math',
     topicMode: false,
-    math: { ops: '+-*/', min: 1, max: 9, count: 4 }
+    keywordsSeeded: m['system:keywords_seeded'] === 'true',
+    math: { ops: '+-*/', min: 1, max: 9, count: 6 }
   };
-  // 一次批量查询加载全部运行时配置（减少 D1 往返）
-  const keys = ['config:lang', 'config:security_level', 'config:verify_mode', 'config:enable_topic_group', 'config:math_ops', 'config:math_min', 'config:math_max', 'config:math_count'];
-  const res = await env.D1.prepare(`SELECT key, value FROM settings WHERE bot_id = ? AND key IN (${keys.map(() => '?').join(',')})`)
-    .bind(botId, ...keys).all();
-  const m = {};
-  for (const r of res.results) m[r.key] = r.value;
   bot.lang = m['config:lang'] || DEFAULT_LANG;
   bot.security = m['config:security_level'] === undefined || m['config:security_level'] === null ? DEFAULT_SECURITY_LEVEL : parseInt(m['config:security_level']);
   bot.verifyMode = m['config:verify_mode'] || 'math';
@@ -280,12 +285,16 @@ async function resolveBot(env, botId) {
     ops: m['config:math_ops'] || '+-*/',
     min: parseInt(m['config:math_min'] || '1'),
     max: parseInt(m['config:math_max'] || '9'),
-    count: parseInt(m['config:math_count'] || '4')
+    count: parseInt(m['config:math_count'] || '6')
   };
   return bot;
 }
 
 // ---------------- D1 存储层 ----------------
+
+// 表结构版本：任何表结构变更（新增表/列、改主键）后必须 +1。
+// 否则冷启动会因版本号一致而跳过建表与迁移，表现为“代码更新了但表结构没变”。
+const SCHEMA_VERSION = 1;
 
 // 当前版本使用的全部表（白名单）。
 // 维护约定：新增表必须同步加进这里，否则冷启动时会被当作废弃表自动清理。
@@ -367,9 +376,22 @@ async function ensureTables(db) {
 }
 
 async function doEnsureTables(db) {
+  // 版本号一致说明表结构已就绪，跳过全部建表/迁移探测（冷启动 18 个查询降为 1 个）
+  let ver = null;
+  try {
+    const row = await db.prepare('SELECT value FROM settings WHERE bot_id = ? AND key = ?')
+      .bind(DEFAULT_BOT_ID, 'system:schema_version').first();
+    ver = row ? row.value : null;
+  } catch (e) {
+    ver = null; // 全新库：settings 表还不存在，走完整初始化
+  }
+  if (ver === String(SCHEMA_VERSION)) return;
+
+  const colInfo = {};
   const toMigrate = [];
   for (const name of TABLES) {
     const info = await db.prepare(`PRAGMA table_info(${name})`).all();
+    colInfo[name] = info.results;
     if (info.results.length && !info.results.some(c => c.name === 'bot_id')) {
       toMigrate.push(name);
     }
@@ -378,8 +400,8 @@ async function doEnsureTables(db) {
     await db.exec(`ALTER TABLE ${name} RENAME TO _old_${name}`);
   }
   // message_hashes 旧结构主键为 (bot_id, hash)，缺 chat_id 列；去重哈希是纯缓存，直接重建
-  const mhInfo = await db.prepare('PRAGMA table_info(message_hashes)').all();
-  if (mhInfo.results.length && !mhInfo.results.some(c => c.name === 'chat_id')) {
+  const mhCols = colInfo['message_hashes'] || [];
+  if (mhCols.length && !mhCols.some(c => c.name === 'chat_id')) {
     await db.exec('DROP TABLE message_hashes');
   }
   await createTables(db);
@@ -389,17 +411,21 @@ async function doEnsureTables(db) {
     await db.exec(`INSERT INTO ${name} (bot_id, ${colList}) SELECT 'default', ${colList} FROM _old_${name}`);
     await db.exec(`DROP TABLE _old_${name}`);
   }
-  // 为已存在的表补充后续新增的列
-  const usInfo = await db.prepare('PRAGMA table_info(user_states)').all();
-  if (usInfo.results.length) {
-    if (!usInfo.results.some(c => c.name === 'pending_msg_id')) {
+  // 为已存在的表补充后续新增的列（user_states 刚被重建时已含全部列，跳过）
+  const usInfo = toMigrate.includes('user_states') ? null : colInfo['user_states'];
+  if (usInfo && usInfo.length) {
+    if (!usInfo.some(c => c.name === 'pending_msg_id')) {
       await db.exec('ALTER TABLE user_states ADD COLUMN pending_msg_id INTEGER DEFAULT 0');
     }
-    if (!usInfo.results.some(c => c.name === 'pending_forward')) {
+    if (!usInfo.some(c => c.name === 'pending_forward')) {
       await db.exec('ALTER TABLE user_states ADD COLUMN pending_forward TEXT');
     }
   }
   await dropUnusedTables(db);
+
+  // 记录已完成本版本的表结构初始化，供下次冷启动短路
+  await db.prepare('INSERT OR REPLACE INTO settings (bot_id, key, value) VALUES (?, ?, ?)')
+    .bind(DEFAULT_BOT_ID, 'system:schema_version', String(SCHEMA_VERSION)).run();
 }
 
 // 清理当前版本已不再使用的表（含迁移中断残留的 _old_* 临时表）。
@@ -458,13 +484,19 @@ async function setUserState(bot, chatId, fields) {
   await bot.db.prepare(`UPDATE user_states SET ${sets} WHERE bot_id = ? AND chat_id = ?`).bind(...vals, bot.id, String(chatId)).run();
 }
 
+// webhook secret 一经生成不再变化，按 bot 缓存在实例内，避免每次请求都查 D1
+const botSecretCache = new Map();
 async function getBotSecret(bot) {
   if (bot.secretEnv) return bot.secretEnv;
-  const s = await settingGet(bot, 'system:bot_secret');
-  if (s) return s;
-  const newSecret = crypto.randomUUID().replace(/-/g, '');
-  await settingSet(bot, 'system:bot_secret', newSecret);
-  return newSecret;
+  const cached = botSecretCache.get(bot.id);
+  if (cached) return cached;
+  let s = await settingGet(bot, 'system:bot_secret');
+  if (!s) {
+    s = crypto.randomUUID().replace(/-/g, '');
+    await settingSet(bot, 'system:bot_secret', s);
+  }
+  botSecretCache.set(bot.id, s);
+  return s;
 }
 
 async function setTopicModeEnabled(bot, enabled) {
@@ -477,12 +509,17 @@ async function getKeywords(bot) {
   return res.results.map(r => r.word);
 }
 
+// 默认关键词只在首次为机器人播种一次，标记存 D1 并在 resolveBot 的批量查询里带回，
+// 避免每条消息都做一次 COUNT（也让管理员可以清空关键词而不被自动补回）。
 async function ensureKeywordsSeeded(bot) {
+  if (bot.keywordsSeeded) return;
   const c = await bot.db.prepare('SELECT COUNT(*) AS n FROM keywords WHERE bot_id = ?').bind(bot.id).first();
   if (c.n === 0) {
     const stmt = bot.db.prepare('INSERT OR IGNORE INTO keywords (bot_id, word) VALUES (?, ?)');
     await bot.db.batch(DEFAULT_KEYWORDS.map(w => stmt.bind(bot.id, w)));
   }
+  await settingSet(bot, 'system:keywords_seeded', 'true');
+  bot.keywordsSeeded = true;
 }
 
 // ---------------- 题库生成 ----------------
@@ -840,8 +877,17 @@ async function handleAdminMessage(bot, message) {
 
 async function handleGuestMessage(bot, message) {
   const chatId = message.chat.id;
-  const state = await getUserState(bot, chatId);
   const now = Math.floor(Date.now() / 1000);
+  // 用户状态 / 关键词 / 去重哈希三个读操作互不依赖，并行执行省两次串行往返
+  const textHash = message.text ? await sha256(message.text.trim()) : null;
+  const [state, keywords, dup] = await Promise.all([
+    getUserState(bot, chatId),
+    message.text ? getKeywords(bot) : Promise.resolve(null),
+    textHash
+      ? bot.db.prepare('SELECT hash FROM message_hashes WHERE bot_id = ? AND chat_id = ? AND hash = ? AND (expires_at IS NULL OR expires_at > ?)')
+        .bind(bot.id, String(chatId), textHash, now).first()
+      : Promise.resolve(null)
+  ]);
 
   // 1. 黑名单检查（trusted 权限高于 blocked）
   if (state.is_blocked && !state.is_trusted) {
@@ -942,18 +988,16 @@ async function handleGuestMessage(bot, message) {
     });
   }
 
-  // 6. 放行 -> 关键词/去重检查（仅文本，trusted 豁免）
+  // 6. 放行 -> 关键词/去重检查（仅文本，trusted 豁免；两者已在入口并行预取）
   if (message.text && !isTrusted) {
-    const keywords = await getKeywords(bot);
-    const hit = keywords.some(k => keywordHit(message.text, k));
+    const words = keywords || await getKeywords(bot);
+    const hit = words.some(k => keywordHit(message.text, k));
     if (hit) return new Response('Ok');
 
-    const hash = await sha256(message.text.trim());
-    const dup = await bot.db.prepare('SELECT hash FROM message_hashes WHERE bot_id = ? AND chat_id = ? AND hash = ? AND (expires_at IS NULL OR expires_at > ?)')
-      .bind(bot.id, String(chatId), hash, now).first();
+    // 去重结果已在入口并行取回（textHash/dup）
     if (dup) return new Response('Ok');
     await bot.db.prepare('INSERT OR REPLACE INTO message_hashes (bot_id, chat_id, hash, expires_at) VALUES (?, ?, ?, ?)')
-      .bind(bot.id, String(chatId), hash, now + DEDUPE_TTL_SECONDS).run();
+      .bind(bot.id, String(chatId), textHash, now + DEDUPE_TTL_SECONDS).run();
   }
 
   return forwardGuestMessage(bot, chatId, message, state, now);
@@ -1064,17 +1108,21 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
 
   if (forwardReq.ok) {
     const adminMsgId = String(forwardReq.result.message_id);
-    await bot.db.prepare('INSERT OR REPLACE INTO message_mappings (bot_id, admin_message_id, guest_chat_id, created_at) VALUES (?, ?, ?, ?)')
-      .bind(bot.id, adminMsgId, String(chatId), now).run();
-    await settingSet(bot, 'last_guest', String(chatId));
+    // 映射写入与 last_guest 记录合并为一次 D1 往返
+    await bot.db.batch([
+      bot.db.prepare('INSERT OR REPLACE INTO message_mappings (bot_id, admin_message_id, guest_chat_id, created_at) VALUES (?, ?, ?, ?)')
+        .bind(bot.id, adminMsgId, String(chatId), now),
+      bot.db.prepare('INSERT OR REPLACE INTO settings (bot_id, key, value) VALUES (?, ?, ?)')
+        .bind(bot.id, 'last_guest', String(chatId))
+    ]);
 
     if (!state.first_card_sent) {
       if (bot.topicMode && topicId) {
         // 话题模式：首次接入或话题重建后 -> 话题内信息卡
-        await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
+        await sendFirstCard(bot, { chatId, message, topicMode: true, topicId, state });
       } else if (!bot.topicMode && !topicId) {
         // 私聊模式首次消息 -> 管理员私聊信息卡
-        await sendFirstCard(bot, { chatId, message, topicMode: false });
+        await sendFirstCard(bot, { chatId, message, topicMode: false, state });
       }
     }
   } else {
@@ -1106,10 +1154,11 @@ async function deliverPendingForward(bot, chatId, state) {
 }
 
 // 首次信息卡：昵称/用户名/UserID/发起时间（不置顶，仅发送）
-async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }) {
+// 调用方若已持有用户状态则传入，省一次 D1 读取
+async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null, state = null }) {
   try {
-    const state = await getUserState(bot, chatId);
-    if (state.first_card_sent) return;
+    const s = state || await getUserState(bot, chatId);
+    if (s.first_card_sent) return;
 
     // 给管理员端发信息卡
     const targetChat = topicMode ? bot.supergroupId : bot.adminUid;
@@ -1262,8 +1311,11 @@ async function handleCallback(bot, callbackQuery) {
     if (!fromAdmin) {
       return answerCallbackQuery(bot, callbackQuery.id, '⛔ Admin only', true);
     }
-    await answerCallbackQuery(bot, callbackQuery.id);
-    return showMenuPanel(bot, callbackQuery.message.chat.id, callbackQuery.message.message_thread_id, data.slice(5), callbackQuery.message.message_id);
+    // 应答按钮与渲染面板并行，省一次 Telegram 往返
+    const ack = answerCallbackQuery(bot, callbackQuery.id);
+    const r = await showMenuPanel(bot, callbackQuery.message.chat.id, callbackQuery.message.message_thread_id, data.slice(5), callbackQuery.message.message_id);
+    await ack;
+    return r;
   }
 
   // 管理面板内联按钮：点击即执行指令（仅管理员）
@@ -1280,9 +1332,11 @@ async function handleCallback(bot, callbackQuery) {
       text: cmdText,
       allowLastGuest: true
     };
-    // 先响应按钮（停止客户端转圈），再执行指令
-    await answerCallbackQuery(bot, callbackQuery.id, '✅');
-    return dispatchAdminCommand(bot, cmdText, fakeMessage);
+    // 应答按钮与执行指令并行，省一次 Telegram 往返
+    const ack = answerCallbackQuery(bot, callbackQuery.id, '✅');
+    const r = await dispatchAdminCommand(bot, cmdText, fakeMessage);
+    await ack;
+    return r;
   }
 
   if (!data.startsWith('verify:')) return;
