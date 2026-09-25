@@ -52,7 +52,6 @@ const STRINGS = {
   'verify.passed': { zh: '✅ <b>验证通过！</b>\n\n请重新发送您的消息。', en: '✅ <b>Verification passed!</b>\n\nPlease resend your message.' },
   'verify.wrong': { zh: '❌ 答案错误，请重试。', en: '❌ Wrong answer, please try again.' },
   'verify.expired': { zh: '❌ 验证已过期，请重新发送消息触发验证。', en: '❌ Verification expired. Resend a message to trigger it again.' },
-  'verify.already': { zh: '✅ 您已通过验证。', en: '✅ You are already verified.' },
   'verify.custom_notset': { zh: '⚠️ 管理员尚未设置自定义验证问题，已临时按算术题验证。', en: '⚠️ Custom question not configured; using math challenge instead.' },
   'rate.limited': { zh: '⚠️ 发送过于频繁，请完成验证后继续。', en: '⚠️ Too many messages. Please complete verification to continue.' },
   'block.done': { zh: '🚫 <b>已屏蔽用户</b>\n用户 <code>{uid}</code> 已进入黑名单并清除信任状态。', en: '🚫 <b>User blocked</b>\nUser <code>{uid}</code> is blacklisted and trust cleared.' },
@@ -519,9 +518,7 @@ function makeReqBody(body) {
 
 function sendMessage(bot, msg = {}) { return requestTelegram(bot, 'sendMessage', makeReqBody(msg)); }
 function copyMessage(bot, msg = {}) { return requestTelegram(bot, 'copyMessage', makeReqBody(msg)); }
-function forwardMessage(bot, msg) { return requestTelegram(bot, 'forwardMessage', makeReqBody(msg)); }
 function createForumTopic(bot, chat_id, name) { return requestTelegram(bot, 'createForumTopic', makeReqBody({ chat_id, name })); }
-function editForumTopic(bot, chat_id, message_thread_id, name) { return requestTelegram(bot, 'editForumTopic', makeReqBody({ chat_id, message_thread_id, name })); }
 function answerCallbackQuery(bot, callback_query_id, text, show_alert = false) { return requestTelegram(bot, 'answerCallbackQuery', makeReqBody({ callback_query_id, text, show_alert })); }
 function deleteMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'deleteMessage', makeReqBody({ chat_id, message_id })); }
 function pinMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'pinChatMessage', makeReqBody({ chat_id, message_id })); }
@@ -531,6 +528,29 @@ function editMessageText(bot, msg = {}) { return requestTelegram(bot, 'editMessa
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// Telegram 官方命令菜单（输入 / 时弹出可点击列表），注册 webhook 与自动注册共用
+const BOT_COMMANDS = [
+  { command: 'admin', description: '管理面板 / Admin panel' },
+  { command: 'info', description: '用户信息 / User info' },
+  { command: 'trust', description: '永久信任 / Trust user' },
+  { command: 'untrust', description: '取消信任 / Remove trust' },
+  { command: 'block', description: '屏蔽用户 / Block user' },
+  { command: 'unblock', description: '解除屏蔽 / Unblock' },
+  { command: 'blacklist', description: '黑名单 / Blacklist' },
+  { command: 'clear', description: '清除映射 / Clear mappings' },
+  { command: 'notice', description: '接入须知 / Welcome notice' },
+  { command: 'welcome', description: '用户欢迎语 / Welcome msg' },
+  { command: 'mode', description: '切换模式 / Switch mode' },
+  { command: 'security', description: '安全级别 / Security level' },
+  { command: 'verify', description: '验证设置 / Verification' },
+  { command: 'math', description: '题库设置 / Math config' },
+  { command: 'keyword', description: '关键词 / Keywords' },
+  { command: 'lang', description: '语言 / Language' },
+  { command: 'broadcast', description: '广播 / Broadcast' },
+  { command: 'bot', description: '机器人管理 / Bot manager' },
+  { command: 'start', description: '开始 / Start' }
+];
 
 // ---------------- 路由入口 ----------------
 
@@ -553,8 +573,8 @@ export default {
     if (p === '/registerWebhook' || (m = p.match(/^\/registerWebhook\/([A-Za-z0-9_-]+)$/))) {
       const bot = await resolveBot(env, m ? m[1] : DEFAULT_BOT_ID);
       if (!bot) return new Response('Unknown bot', { status: 404 });
-      const secret = await getBotSecret(bot);
-      return registerWebhook(bot, url, WEBHOOK, secret);
+      const r = await autoRegisterWebhook(bot);
+      return new Response('ok' in r && r.ok ? `Ok (${bot.id})` : JSON.stringify(r, null, 2));
     }
     if (p === '/unRegisterWebhook' || (m = p.match(/^\/unRegisterWebhook\/([A-Za-z0-9_-]+)$/))) {
       const bot = await resolveBot(env, m ? m[1] : DEFAULT_BOT_ID);
@@ -1014,7 +1034,7 @@ async function handleCallback(bot, callbackQuery) {
 
   if (!data.startsWith('verify:')) return;
 
-  const [_, uidStr, answerIdxStr] = data.split(':');
+  const [_, __, answerIdxStr] = data.split(':');
   const answerIdx = parseInt(answerIdxStr);
   const chatId = callbackQuery.message.chat.id;
   const now = Math.floor(Date.now() / 1000);
@@ -1449,27 +1469,7 @@ async function autoRegisterWebhook(bot) {
   const path = bot.id === DEFAULT_BOT_ID ? WEBHOOK : `${WEBHOOK}/${bot.id}`;
   const webhookUrl = `${WORKER_ORIGIN}${path}`;
   const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: webhookUrl, secret_token: secret }))).json();
-  await requestTelegram(bot, 'setMyCommands', makeReqBody({
-    commands: [
-      { command: 'admin', description: '管理面板 / Admin panel' },
-      { command: 'info', description: '用户信息 / User info' },
-      { command: 'block', description: '屏蔽用户 / Block user' },
-      { command: 'unblock', description: '解除屏蔽 / Unblock' },
-      { command: 'blacklist', description: '黑名单 / Blacklist' },
-      { command: 'clear', description: '清除映射 / Clear mappings' },
-      { command: 'notice', description: '接入须知 / Welcome notice' },
-      { command: 'welcome', description: '用户欢迎语 / Welcome msg' },
-      { command: 'mode', description: '切换模式 / Switch mode' },
-      { command: 'security', description: '安全级别 / Security level' },
-      { command: 'verify', description: '验证设置 / Verification' },
-      { command: 'math', description: '题库设置 / Math config' },
-      { command: 'keyword', description: '关键词 / Keywords' },
-      { command: 'lang', description: '语言 / Language' },
-      { command: 'broadcast', description: '广播 / Broadcast' },
-      { command: 'bot', description: '机器人管理 / Bot manager' },
-      { command: 'start', description: '开始 / Start' }
-    ]
-  }));
+  await requestTelegram(bot, 'setMyCommands', makeReqBody({ commands: BOT_COMMANDS }));
   return r;
 }
 
@@ -1614,37 +1614,6 @@ async function handleBroadcastCommand(bot, message) {
 }
 
 // ---------------- Webhook 注册 ----------------
-
-async function registerWebhook(bot, requestUrl, suffix, secret) {
-  // 带 bot id 的路径：/endpoint/{id}；default 保持旧路径 /endpoint 兼容
-  const path = bot.id === DEFAULT_BOT_ID ? suffix : `${suffix}/${bot.id}`;
-  const webhookUrl = `${requestUrl.protocol}//${requestUrl.hostname}${path}`;
-  const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: webhookUrl, secret_token: secret }))).json();
-  // 注册 Telegram 官方命令菜单：输入 / 时弹出可点击的命令列表
-  await requestTelegram(bot, 'setMyCommands', makeReqBody({
-    commands: [
-      { command: 'admin', description: '管理面板 / Admin panel' },
-      { command: 'info', description: '用户信息 / User info' },
-      { command: 'trust', description: '永久信任 / Trust user' },
-      { command: 'untrust', description: '取消信任 / Remove trust' },
-      { command: 'block', description: '屏蔽用户 / Block user' },
-      { command: 'unblock', description: '解除屏蔽 / Unblock' },
-      { command: 'blacklist', description: '黑名单 / Blacklist' },
-      { command: 'clear', description: '清除映射 / Clear mappings' },
-      { command: 'notice', description: '接入须知 / Welcome notice' },
-      { command: 'welcome', description: '用户欢迎语 / Welcome msg' },
-      { command: 'mode', description: '切换模式 / Switch mode' },
-      { command: 'security', description: '安全级别 / Security level' },
-      { command: 'verify', description: '验证设置 / Verification' },
-      { command: 'math', description: '题库设置 / Math config' },
-      { command: 'keyword', description: '关键词 / Keywords' },
-      { command: 'lang', description: '语言 / Language' },
-      { command: 'broadcast', description: '广播 / Broadcast' },
-      { command: 'start', description: '开始 / Start' }
-    ]
-  }));
-  return new Response('ok' in r && r.ok ? `Ok (${bot.id})` : JSON.stringify(r, null, 2));
-}
 
 async function unRegisterWebhook(bot) {
   const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: '' }))).json();
