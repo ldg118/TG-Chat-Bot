@@ -50,55 +50,9 @@
 
 **什么都不用配。** 直接沿用单机器人变量 `ENV_BOT_TOKEN`、`ENV_ADMIN_UID` 等即可，系统会自动把它当作 id 为 `default` 的机器人，webhook 路径仍是 `/endpoint`，与旧版行为完全一致。
 
-### 要加第二个、第三个机器人？
+### 要加第二个、第三个机器人？（管理面板操作，免 Cloudflare）
 
-只需设置一个环境变量 `ENV_BOTS`，值为 JSON 数组，列出所有机器人。
-
-**在 Cloudflare 里的填写方式：** 进入 Worker → Settings → Variables and Secrets → 添加环境变量：
-- **密钥** 填 `ENV_BOTS`
-- **值** 填**整个 JSON 数组**（所有机器人写在同一个变量里，不是每个机器人单独建一个变量），建议开启右侧的"密钥"加密开关（值里含 bot token）
-- 环境勾选 **生产**，保存后重新部署生效
-
-```json
-[
-  {"id":"default","token":"123456:ABC-DEF...","admin":"111111111"},
-  {"id":"support","token":"654321:XYZ-GHI...","admin":"222222222","sg":"-1001234567890","topic":true,"max":40}
-]
-```
-
-> JSON 注意：双引号不能省略、末尾不能有多余逗号。
-
-**每个字段的含义：**
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `id` | 是 | 机器人标识，只能用小写字母/数字/`-`/`_`。决定 webhook 路径 `/endpoint/{id}` |
-| `token` | 是 | 从 @BotFather 获取的 Bot Token |
-| `admin` | 是 | 该机器人的管理员 Telegram User ID |
-| `sg` | 否 | 超级群组 ID（以 `-100` 开头），仅话题模式需要 |
-| `topic` | 否 | `true` 则默认开启话题群组模式，默认 `false`（私聊模式）。运行后可用 `/mode` 切换 |
-| `max` | 否 | 频率限制（条/分钟），超限触发重新验证，默认 `40` |
-| `secret` | 否 | Webhook 安全密钥；留空则自动生成并存入 D1 |
-
-**添加新机器人的完整步骤：**
-
-1. 从 @BotFather 新建一个 bot，拿到 token
-2. 在 Cloudflare 里编辑 `ENV_BOTS`，往数组里加一条（含 `id`、`token`、`admin`）
-3. 部署 / 保存
-4. 访问 `https://你的-worker域名/registerWebhook/{新id}` 注册该机器人的 webhook
-   （例如 `.../registerWebhook/support`）
-5. 完成。这个新机器人会用自己的 D1 空间，与旧机器人互不干扰
-
-**几个注意点：**
-
-- 每个机器人**单独注册** webhook：`default` 用 `/registerWebhook`，其余用 `/registerWebhook/{id}`
-- `ENV_BOTS` 和旧的单机器人变量可以同时存在：数组里定义了的以数组为准；数组里**没有** `default` 条目时，旧变量会自动补位成 `default`
-- 改了 `ENV_BOTS` 里某个机器人的 `token`/`admin` 后，需要重新访问它的 `registerWebhook` 地址让配置生效
-- 管理员指令（`/admin`、`/block` 等）在每个机器人里独立可用，作用于该机器人自己的用户
-
-### 在管理面板直接添加机器人（免 Cloudflare 操作）
-
-部署一次后，日常加机器人**不需要再进 Cloudflare**。在 bot 的管理面板（`/admin`）里用 `/bot` 指令即可，新机器人配置存入 D1 并**自动注册 webhook**，加完立刻能用：
+日常加机器人**不需要碰 Cloudflare**，直接在 bot 的管理面板（`/admin`）里用 `/bot` 指令操作。配置存入 D1 并**自动注册 webhook**，加完立刻能用：
 
 ```
 /bot list                                        → 查看已添加的机器人
@@ -108,8 +62,29 @@
 /bot set support token 789:GHI                   → 修改字段（token/admin/sg/max）
 ```
 
+**添加新机器人的完整步骤：**
+
+1. 从 @BotFather 新建一个 bot，拿到 token
+2. 给你的 default 机器人发送 `/bot add <id> <token> <管理员UID>`（id 只能用小写字母/数字/`-`/`_`）
+3. 完成。bot 会自动验证 token、注册 webhook、配置命令菜单，新机器人立即可用
+
+**参数说明：**
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 机器人标识，决定 webhook 路径 `/endpoint/{id}` |
+| `token` | 是 | 从 @BotFather 获取的 Bot Token |
+| `管理员UID` | 是 | 该机器人的管理员 Telegram User ID |
+| `sg` | 否 | 超级群组 ID（以 `-100` 开头），仅话题模式需要 |
+| `topic` | 否 | 填 `topic` 则默认开启话题群组模式，默认私聊模式。运行后可用 `/mode` 切换 |
+| `max` | 否 | 频率限制（条/分钟），默认 `40` |
+
+**几个注意点：**
+
 - 添加时自动验证 token 有效性，无效不会保存；含 token 的消息会被自动删除防泄露
-- D1 里的机器人**优先于** `ENV_BOTS` 环境变量；同名时以 D1 为准
+- 每个机器人的数据（黑名单、关键词、验证、消息映射、配置）在 D1 中完全隔离，互不影响
+- 管理员指令（`/admin`、`/block` 等）在每个机器人里独立可用
+- 改了某个机器人的 `token`/`admin` 后（`/bot set`），重新访问它的 `/registerWebhook/{id}` 即可生效
 - 首次部署的 default 机器人仍需手动访问一次 `/registerWebhook`（它无法自己注册自己）
 
 ## 运行模式

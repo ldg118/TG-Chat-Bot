@@ -1,13 +1,10 @@
-// Telegram MirroTalk Bot - Cloudflare Worker (D1 存储版, ES module 格式, 多机器人)
+// Telegram MirroTalk Bot - Cloudflare Worker (D1 存储版, ES module 格式)
 // 数据持久化在 D1 (绑定名: DB)，首次请求自动建表/迁移，无需手动操作。
 //
-// 多机器人配置 (ENV_BOTS, JSON 数组):
-//   [{"id":"default","token":"123:ABC","admin":"111111","sg":"-100xxx","topic":true,"max":40},
-//    {"id":"support","token":"456:DEF","admin":"222222"}]
-//   - id: webhook 路径标识 (/endpoint/{id})，建议只用字母数字-_
-//   - token: Bot Token; admin: 管理员 UID; sg: 超级群组 ID; topic: 默认话题模式
-//   - max: 频率限制(条/分钟, 默认40); secret: webhook 密钥(可选); 均可省略走默认
-// 兼容旧配置：若未设置 ENV_BOTS 但设置了 ENV_BOT_TOKEN，自动作为 id="default" 的单机器人。
+// 机器人配置：
+//   - 单机器人（默认）：设置 ENV_BOT_TOKEN / ENV_ADMIN_UID 等独立变量，id 为 "default"。
+//   - 多机器人：一律通过管理面板 /bot add 指令存入 D1（免 Cloudflare 操作），webhook 路径 /endpoint/{id}。
+//     每个机器人需单独访问 /registerWebhook/{id} 注册。
 
 const WEBHOOK = '/endpoint';
 const DEFAULT_BOT_ID = 'default';
@@ -44,8 +41,8 @@ const STRINGS = {
   'mode.topic': { zh: '话题群组模式', en: 'Topic Group' },
   'mode.private': { zh: '私聊模式', en: 'Private Chat' },
   'mode.warn.nosg': {
-    zh: '⚠️ <b>配置警告</b>: 话题模式已开启，但未配置超级群组 ID（sg）。请在 ENV_BOTS 的 sg 字段或 ENV_SUPERGROUP_ID 中填入（以 -100 开头），或发送 <code>/mode private</code> 切换私聊模式。',
-    en: '⚠️ <b>Config warning</b>: topic mode is on but supergroup id (sg) is not set. Fill sg in ENV_BOTS or ENV_SUPERGROUP_ID (starts with -100), or send <code>/mode private</code>.'
+    zh: '⚠️ <b>配置警告</b>: 话题模式已开启，但未配置超级群组 ID（sg）。请在面板用 <code>/bot set default sg -100xxx</code> 或设置 ENV_SUPERGROUP_ID，或发送 <code>/mode private</code> 切换私聊模式。',
+    en: '⚠️ <b>Config warning</b>: topic mode is on but supergroup id (sg) is not set. Use <code>/bot set default sg -100xxx</code> in the panel or set ENV_SUPERGROUP_ID, or send <code>/mode private</code>.'
   },
   'verify.title': { zh: '🔒 <b>身份验证</b>', en: '🔒 <b>Verification</b>' },
   'verify.math_text': { zh: '问题：{q}\n\n(验证通过后您的消息将自动发送)', en: 'Question: {q}\n\n(Your message will be sent automatically after verification)' },
@@ -199,14 +196,9 @@ function t(bot, key, vars = {}) {
 // ---------------- 机器人配置解析 ----------------
 
 function parseBots(env) {
-  let list = [];
-  try { list = JSON.parse(env.ENV_BOTS || '[]'); } catch (e) { console.error('ENV_BOTS parse error:', e); }
+  // 仅保留 default 机器人的旧版独立变量兼容；多机器人一律通过面板 /bot 存入 D1
   const bots = {};
-  for (const b of list) {
-    if (b && b.id && b.token) bots[String(b.id)] = b;
-  }
-  // 兼容旧单机器人配置
-  if (env.ENV_BOT_TOKEN && !bots[DEFAULT_BOT_ID]) {
+  if (env.ENV_BOT_TOKEN) {
     bots[DEFAULT_BOT_ID] = {
       id: DEFAULT_BOT_ID,
       token: env.ENV_BOT_TOKEN,
@@ -223,7 +215,7 @@ function parseBots(env) {
 // Worker 自身域名（用于面板内自动注册 webhook）
 let WORKER_ORIGIN = '';
 
-// 构建带机器人上下文与已加载配置的 bot 对象。优先读 D1 bots 表（面板管理），回退到 ENV_BOTS 环境变量。
+// 构建带机器人上下文与已加载配置的 bot 对象。优先读 D1 bots 表（面板管理），回退到 default 独立变量。
 async function resolveBot(env, botId) {
   let cfg = null;
   if (env.DB) {
@@ -234,7 +226,7 @@ async function resolveBot(env, botId) {
     if (!fromEnv) return null;
     cfg = { bot_id: fromEnv.id, token: fromEnv.token, admin_uid: String(fromEnv.admin || ''), sg: String(fromEnv.sg || ''), topic: (fromEnv.topic === true || fromEnv.topic === 'true') ? 1 : 0, max: fromEnv.max, secret: fromEnv.secret || '' };
   }
-  // default 机器人：缺失字段用独立 ENV_* 变量补齐（兼容 ENV_BOTS 里漏写 sg/topic 的情况）
+  // default 机器人：缺失字段用独立 ENV_* 变量补齐
   if (botId === DEFAULT_BOT_ID) {
     if (!cfg.admin_uid) cfg.admin_uid = env.ENV_ADMIN_UID || '';
     if (!cfg.sg) cfg.sg = env.ENV_SUPERGROUP_ID || '';
@@ -908,13 +900,16 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
         const errDesc = topicRes.description || 'Unknown error';
         const kicked = /kicked|not a member|chat not found/i.test(errDesc);
         const hint = kicked ? t(bot, 'topic.hint.kicked') : t(bot, 'topic.hint.perm');
-        // 系统报错只发管理员私聊，不污染群组
-        await sendMessage(bot, {
-          chat_id: bot.adminUid,
-          text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
-          parse_mode: 'HTML'
-        });
-        // 降级：本条转发到管理员私聊
+        // 失败告警每小时最多一次，避免刷屏；本条消息降级转发到管理员私聊
+        const lastAlert = parseInt((await settingGet(bot, 'topic:last_alert')) || '0');
+        if (now - lastAlert > 3600) {
+          await settingSet(bot, 'topic:last_alert', String(now));
+          await sendMessage(bot, {
+            chat_id: bot.adminUid,
+            text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
+            parse_mode: 'HTML'
+          });
+        }
         forwardChatId = bot.adminUid;
       }
     }

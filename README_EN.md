@@ -60,55 +60,9 @@ One Worker can serve multiple bots at the same time, sharing a single D1 databas
 
 **Nothing to configure.** Just keep using the single-bot vars (`ENV_BOT_TOKEN`, `ENV_ADMIN_UID`, etc.). The system treats it as a bot with id `default`, the webhook path stays `/endpoint`, and behavior is identical to the old version.
 
-### Adding a second, third bot?
+### Adding a second, third bot? (from the admin panel, no Cloudflare)
 
-Set one environment variable `ENV_BOTS` to a JSON array listing all bots.
-
-**How to enter it in Cloudflare:** Worker → Settings → Variables and Secrets → add variable:
-- **Key**: `ENV_BOTS`
-- **Value**: the **entire JSON array** (all bots in one variable — do NOT create one variable per bot). Enable the "Secret" toggle since the value contains bot tokens.
-- Check **Production**, save, and redeploy
-
-```json
-[
-  {"id":"default","token":"123456:ABC-DEF...","admin":"111111111"},
-  {"id":"support","token":"654321:XYZ-GHI...","admin":"222222222","sg":"-1001234567890","topic":true,"max":40}
-]
-```
-
-> JSON notes: keep all double quotes, no trailing commas.
-
-**Field reference:**
-
-| Field | Required | Description |
-|---|---|---|
-| `id` | Yes | Bot identifier, lowercase letters/digits/`-`/`_` only. Determines webhook path `/endpoint/{id}` |
-| `token` | Yes | Bot Token from @BotFather |
-| `admin` | Yes | This bot's admin Telegram User ID |
-| `sg` | No | Supergroup ID (starts with `-100`), only needed for topic mode |
-| `topic` | No | `true` enables topic-group mode by default, else `false` (private mode). Switchable at runtime via `/mode` |
-| `max` | No | Rate limit (msgs/min); exceeding it forces re-verification. Default `40` |
-| `secret` | No | Webhook secret token; auto-generated and stored in D1 if left empty |
-
-**Steps to add a new bot:**
-
-1. Create a new bot at @BotFather, get its token
-2. Edit `ENV_BOTS` in Cloudflare, append an entry (with `id`, `token`, `admin`)
-3. Deploy / save
-4. Visit `https://<worker-domain>/registerWebhook/{new-id}` to register that bot's webhook
-   (e.g. `.../registerWebhook/support`)
-5. Done. The new bot uses its own D1 space, fully separate from existing bots
-
-**Notes:**
-
-- Each bot registers its webhook **separately**: `default` uses `/registerWebhook`, others use `/registerWebhook/{id}`
-- `ENV_BOTS` and the legacy single-bot vars can coexist: entries defined in the array take precedence; if the array has **no** `default` entry, the old vars auto-fill as `default`
-- After changing a bot's `token`/`admin` in `ENV_BOTS`, re-visit its `registerWebhook` URL for the change to take effect
-- Admin commands (`/admin`, `/block`, etc.) work independently in each bot, acting on that bot's own users
-
-### Add bots from the admin panel (no Cloudflare needed)
-
-After deploying once, adding bots no longer requires touching Cloudflare. Use `/bot` commands in the admin panel (`/admin`) — configs are stored in D1 and the webhook is **auto-registered**, ready immediately:
+Adding bots no longer requires touching Cloudflare. Use `/bot` commands in the admin panel (`/admin`) — configs are stored in D1 and the webhook is **auto-registered**, ready immediately:
 
 ```
 /bot list                                        → show added bots
@@ -118,8 +72,29 @@ After deploying once, adding bots no longer requires touching Cloudflare. Use `/
 /bot set support token 789:GHI                   → update field (token/admin/sg/max)
 ```
 
+**Steps to add a new bot:**
+
+1. Create a new bot at @BotFather, get its token
+2. Send `/bot add <id> <token> <admin_uid>` to your default bot (id: lowercase letters/digits/`-`/`_` only)
+3. Done. The bot validates the token, registers the webhook and sets up the command menu automatically.
+
+**Parameter reference:**
+
+| Param | Required | Description |
+|---|---|---|
+| `id` | Yes | Bot identifier, determines webhook path `/endpoint/{id}` |
+| `token` | Yes | Bot Token from @BotFather |
+| `admin_uid` | Yes | This bot's admin Telegram User ID |
+| `sg` | No | Supergroup ID (starts with `-100`), only needed for topic mode |
+| `topic` | No | Pass `topic` to enable topic-group mode by default, else private mode. Switchable via `/mode` |
+| `max` | No | Rate limit (msgs/min). Default `40` |
+
+**Notes:**
+
 - Token validity is checked on add; invalid tokens are not saved. Messages containing tokens are auto-deleted.
-- D1 bots take precedence over `ENV_BOTS`; same-id entries in D1 win.
+- Each bot's data (blacklist, keywords, verification, message mappings, settings) is fully isolated in D1.
+- Admin commands (`/admin`, `/block`, etc.) work independently in each bot.
+- After changing a bot's `token`/`admin` via `/bot set`, re-visit its `/registerWebhook/{id}` to apply.
 - The initial `default` bot still needs one manual visit to `/registerWebhook` (it can't register itself).
 
 ## Operating Modes
