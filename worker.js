@@ -98,7 +98,8 @@ const STRINGS = {
     en: 'Usage:\n<code>/keyword list</code> list keywords\n<code>/keyword add &lt;word&gt;</code> add\n<code>/keyword del &lt;word&gt;</code> delete\n<code>/keyword reset</code> restore defaults'
   },
   'keyword.list_empty': { zh: '📃 关键词黑名单为空。', en: '📃 Keyword blacklist is empty.' },
-  'keyword.list_title': { zh: '📃 <b>关键词黑名单</b> (共 {n} 个)', en: '📃 <b>Keyword blacklist</b> ({n} words)' },
+  'keyword.list_title': { zh: '📃 <b>关键词黑名单</b> (共 {n} 个，含默认 {d} 个)', en: '📃 <b>Keyword blacklist</b> ({n} total, {d} defaults)' },
+  'keyword.legend': { zh: '\n<i>带 * 为系统默认词，/keyword del 词 可移除</i>', en: '\n<i>* = built-in default, remove with /keyword del &lt;word&gt;</i>' },
   'keyword.added': { zh: '✅ 已添加关键词: <code>{w}</code>', en: '✅ Keyword added: <code>{w}</code>' },
   'keyword.exists': { zh: 'ℹ️ 关键词 <code>{w}</code> 已存在。', en: 'ℹ️ Keyword <code>{w}</code> already exists.' },
   'keyword.deleted': { zh: '🗑 已删除关键词: <code>{w}</code>', en: '🗑 Keyword deleted: <code>{w}</code>' },
@@ -1097,9 +1098,12 @@ async function handleKeywordCommand(bot, message) {
     if (!action) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'keyword.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
     const words = await getKeywords(bot);
     if (!words.length) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'keyword.list_empty'), message_thread_id: message.message_thread_id });
+    const defaultSet = new Set(DEFAULT_KEYWORDS);
+    const defaultCount = words.filter(w => defaultSet.has(w)).length;
+    const list = words.map(w => `<code>${escapeHtml(w)}</code>${defaultSet.has(w) ? '*' : ''}`).join('  ');
     return sendMessage(bot, {
       chat_id: message.chat.id,
-      text: `${t(bot, 'keyword.list_title', { n: words.length })}\n${words.map(w => `<code>${escapeHtml(w)}</code>`).join('  ')}`,
+      text: `${t(bot, 'keyword.list_title', { n: words.length, d: defaultCount })}\n${list}${t(bot, 'keyword.legend')}`,
       parse_mode: 'HTML',
       message_thread_id: message.message_thread_id
     });
