@@ -930,13 +930,20 @@ async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }
 
 async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
   const now = Math.floor(Date.now() / 1000);
-  const state = await getUserState(bot, chatId);
 
-  // 已有未过期的验证卡 -> 不重复发送
-  if (state.pending_answer && state.pending_code_expiry > now) {
+  // 原子占位：并发请求中只有一个能成功 claim（解决连发消息重复弹卡竞态）
+  const claim = await bot.db.prepare(
+    `UPDATE user_states SET pending_code_expiry = ?, pending_answer = 'CLAIMED'
+     WHERE bot_id = ? AND chat_id = ?
+       AND (pending_answer IS NULL OR pending_answer = '' OR pending_code_expiry <= ?)`
+  ).bind(now + CODE_TTL_SECONDS, bot.id, String(chatId), now).run();
+  if (!claim.meta.changes) {
+    // 已有验证卡在等待作答（或并发请求已占位），不重复发送
     return new Response('Ok');
   }
+
   // 旧卡已过期 -> 删除失效的旧卡再发新卡
+  const state = await getUserState(bot, chatId);
   if (state.pending_msg_id) {
     try { await deleteMessage(bot, chatId, state.pending_msg_id); } catch (e) { /* 已被删除 */ }
   }
@@ -956,6 +963,7 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
         reply_to_message_id: pendingMsgId
       });
       if (res.ok) await setUserState(bot, chatId, { pending_msg_id: res.result.message_id });
+      else await setUserState(bot, chatId, { pending_answer: null, pending_code_expiry: 0 });
       return res;
     }
     // 未配置自定义题目时降级为算术题
@@ -995,6 +1003,7 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
     reply_markup: { inline_keyboard: rows }
   });
   if (res.ok) await setUserState(bot, chatId, { pending_msg_id: res.result.message_id });
+  else await setUserState(bot, chatId, { pending_answer: null, pending_code_expiry: 0 });
   return res;
 }
 
@@ -1039,7 +1048,7 @@ async function handleCallback(bot, callbackQuery) {
 
   const state = await getUserState(bot, chatId);
 
-  if (!state.pending_answer || state.pending_code_expiry <= now) {
+  if (!state.pending_answer || state.pending_answer === 'CLAIMED' || state.pending_code_expiry <= now) {
     return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.expired'), true);
   }
 
