@@ -215,6 +215,11 @@ function parseBots(env) {
 // Worker 自身域名（用于面板内自动注册 webhook）
 let WORKER_ORIGIN = '';
 
+// Isolate 级去重与锁（防 Telegram webhook 重复推送导致重复处理/重复建话题，参考 CTT 实现）
+const processedMessages = new Set();
+const processedCallbacks = new Set();
+const topicCreationLocks = new Map();
+
 // 构建带机器人上下文与已加载配置的 bot 对象。优先读 D1 bots 表（面板管理），回退到 default 独立变量。
 async function resolveBot(env, botId) {
   let cfg = null;
@@ -621,9 +626,20 @@ async function onUpdate(bot, update) {
   await ensureKeywordsSeeded(bot);
 
   if ('message' in update) {
-    await onMessage(bot, update.message);
+    // 消息去重：Telegram 偶发重复推送同一 update
+    const m = update.message;
+    const key = `${bot.id}:${m.chat.id}:${m.message_id}`;
+    if (processedMessages.has(key)) return;
+    processedMessages.add(key);
+    if (processedMessages.size > 10000) processedMessages.clear();
+    await onMessage(bot, m);
   } else if ('callback_query' in update) {
-    await handleCallback(bot, update.callback_query);
+    const cq = update.callback_query;
+    const key = `${bot.id}:${cq.id}`;
+    if (processedCallbacks.has(key)) return;
+    processedCallbacks.add(key);
+    if (processedCallbacks.size > 10000) processedCallbacks.clear();
+    await handleCallback(bot, cq);
   }
 }
 
@@ -853,6 +869,62 @@ async function handleGuestMessage(bot, message) {
   return forwardGuestMessage(bot, chatId, message, state, now);
 }
 
+// 获取/创建用户话题（加锁防并发重复创建；失败进入冷却并降级）。返回 { topicId, degraded }
+async function ensureTopicFor(bot, chatId, message, now) {
+  const lockKey = `${bot.id}:${chatId}`;
+  const prev = topicCreationLocks.get(lockKey) || Promise.resolve();
+  const task = prev.then(() => ensureTopicInner(bot, chatId, message, now));
+  topicCreationLocks.set(lockKey, task.catch(() => {}));
+  try {
+    return await task;
+  } finally {
+    if (topicCreationLocks.get(lockKey) === task) topicCreationLocks.delete(lockKey);
+  }
+}
+
+async function ensureTopicInner(bot, chatId, message, now) {
+  const row = await bot.db.prepare('SELECT topic_id FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).first();
+  if (row) return { topicId: row.topic_id, degraded: false };
+
+  // 冷却期内不再尝试建话题（防群级限流），本条降级到管理员私聊
+  const lastTry = parseInt((await settingGet(bot, `topic:last:${chatId}`)) || '0');
+  if (now - lastTry < TOPIC_CREATE_COOLDOWN) {
+    return { topicId: null, degraded: true };
+  }
+  await settingSet(bot, `topic:last:${chatId}`, String(now));
+
+  let title = `${message.chat.first_name || ''} ${message.chat.last_name || ''}`.trim();
+  if (message.chat.username) title += ` (@${message.chat.username})`;
+  if (!title) title = `User ${chatId}`;
+  if (title.length > 128) title = title.substring(0, 125) + '...';
+
+  const topicRes = await createForumTopic(bot, bot.supergroupId, title);
+  if (topicRes.ok) {
+    const topicId = String(topicRes.result.message_thread_id);
+    await bot.db.prepare('INSERT OR REPLACE INTO chat_topic_mappings (bot_id, chat_id, topic_id) VALUES (?, ?, ?)')
+      .bind(bot.id, String(chatId), topicId).run();
+    await settingDel(bot, `topic:last:${chatId}`);
+    await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
+    return { topicId, degraded: false };
+  }
+
+  console.error('Create topic failed:', JSON.stringify(topicRes));
+  const errDesc = topicRes.description || 'Unknown error';
+  const kicked = /kicked|not a member|chat not found/i.test(errDesc);
+  const hint = kicked ? t(bot, 'topic.hint.kicked') : t(bot, 'topic.hint.perm');
+  // 失败告警每小时最多一次，避免刷屏；本条消息降级转发到管理员私聊
+  const lastAlert = parseInt((await settingGet(bot, 'topic:last_alert')) || '0');
+  if (now - lastAlert > 3600) {
+    await settingSet(bot, 'topic:last_alert', String(now));
+    await sendMessage(bot, {
+      chat_id: bot.adminUid,
+      text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
+      parse_mode: 'HTML'
+    });
+  }
+  return { topicId: null, degraded: true };
+}
+
 // 转发用户消息到管理端（话题/私聊模式通用），供正常流程与验证后补发复用
 async function forwardGuestMessage(bot, chatId, message, state, now) {
   let topicId = null;
@@ -873,46 +945,10 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
 
   if (bot.topicMode && bot.supergroupId) {
     forwardChatId = bot.supergroupId;
-    const row = await bot.db.prepare('SELECT topic_id FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).first();
-    topicId = row ? row.topic_id : null;
-
-    // 创建话题冷却期内（群级限流保护）：降级转发到管理员私聊，不再刷 createForumTopic
-    const lastTry = parseInt((await settingGet(bot, `topic:last:${chatId}`)) || '0');
-    if (!topicId && now - lastTry < TOPIC_CREATE_COOLDOWN) {
-      forwardChatId = bot.adminUid;
-      topicId = null;
-    } else if (!topicId) {
-      await settingSet(bot, `topic:last:${chatId}`, String(now));
-      let title = `${message.chat.first_name || ''} ${message.chat.last_name || ''}`.trim();
-      if (message.chat.username) title += ` (@${message.chat.username})`;
-      if (!title) title = `User ${chatId}`;
-      if (title.length > 128) title = title.substring(0, 125) + '...';
-
-      const topicRes = await createForumTopic(bot, bot.supergroupId, title);
-      if (topicRes.ok) {
-        topicId = String(topicRes.result.message_thread_id);
-        await bot.db.prepare('INSERT OR REPLACE INTO chat_topic_mappings (bot_id, chat_id, topic_id) VALUES (?, ?, ?)')
-          .bind(bot.id, String(chatId), topicId).run();
-        await settingDel(bot, `topic:last:${chatId}`);
-        await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
-      } else {
-        console.error('Create topic failed:', JSON.stringify(topicRes));
-        const errDesc = topicRes.description || 'Unknown error';
-        const kicked = /kicked|not a member|chat not found/i.test(errDesc);
-        const hint = kicked ? t(bot, 'topic.hint.kicked') : t(bot, 'topic.hint.perm');
-        // 失败告警每小时最多一次，避免刷屏；本条消息降级转发到管理员私聊
-        const lastAlert = parseInt((await settingGet(bot, 'topic:last_alert')) || '0');
-        if (now - lastAlert > 3600) {
-          await settingSet(bot, 'topic:last_alert', String(now));
-          await sendMessage(bot, {
-            chat_id: bot.adminUid,
-            text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
-            parse_mode: 'HTML'
-          });
-        }
-        forwardChatId = bot.adminUid;
-      }
-    }
+    // 话题创建加锁 + 冷却（参考 CTT topicCreationLocks）：并发消息只建一次话题
+    const r = await ensureTopicFor(bot, chatId, message, now);
+    topicId = r.topicId;
+    if (r.degraded) forwardChatId = bot.adminUid;
   }
 
   // 转发（copyMessage 穿透隐私设置）
