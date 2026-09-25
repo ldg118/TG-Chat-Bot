@@ -16,7 +16,7 @@ A Telegram message forwarding bot running on Cloudflare Workers, with anti-spam 
   - **Dynamic Math Verification**: Unverified users solve a random math problem (e.g., 3+5=?) — configurable operators, range, and option count.
   - **Custom Q&A Verification**: Admin-defined question/answer; the answer is stored server-side only.
   - **Security Levels**: Strict (mute), Standard (no media), Relaxed (no verification).
-  - **Deduplication**: Prevents duplicate content within 7 days.
+  - **Deduplication**: A user's identical content is not forwarded twice within 2 minutes.
   - **Block/Trust**: Shadowban (`/block`) or permanently trust (`/trust`) users.
 - **Management Tools**:
   - **Broadcast**: Reply to a message to broadcast to all users (skips the blacklist).
@@ -122,7 +122,7 @@ Use `/bot` commands inside the admin panel (`/admin`) — configs are stored in 
 
 ## Anti-Spam Details
 
-1.  **Keyword Blacklist**: Messages containing suspicious keywords are silently dropped. 12 defaults, managed via `/keyword`.
+1.  **Keyword Blacklist**: Messages hitting suspicious keywords are silently dropped. Chinese words match as substrings; ASCII words match on **word boundaries** (case-insensitive) so short words like `av` don't false-positive inside passwords or account names. 12 defaults, managed via `/keyword`.
 2.  **Verification** (pick one):
     - **Dynamic Math** (default): a randomly generated problem answered via option buttons; operators, range and option count are configurable.
     - **Custom Q&A**: an admin-set question/answer; the answer is stored server-side only.
@@ -165,12 +165,16 @@ All data lives in Cloudflare D1; tables are created/repaired on the first reques
 - **user_states**: block/trust/verify/rate/pending-challenge/stashed-message/first-card state, permanent.
 - **message_mappings**: routing map keyed by `(bot_id, admin_message_id)`; **permanent**, cleared via `/clear`.
 - **chat_topic_mappings**: user ↔ topic bindings, permanent.
-- **message_hashes**: dedupe hashes, auto-cleaned after 7 days by the daily Cron.
+- **message_hashes**: dedupe hashes, isolated per user, valid for 2 minutes, expired rows cleaned by the daily Cron.
 - **keywords**: keyword blacklist.
 - **settings**: config (security level/verification mode/math bank/language/welcome/webhook secret).
 - **bots**: multi-bot config (id/token/admin/sg/mode/rate limit/secret), maintained by `/bot` commands.
 
 Every table uses `bot_id` as the first primary-key column to isolate data between bots.
+
+**Automatic cleanup of obsolete tables**: on cold start the Worker compares the actual tables against the list used by the current code and **drops any table not in that list** (including leftover `_old_*` tables from an interrupted migration). Tables prefixed with `sqlite_` / `d1_` are exempt. So obsolete tables from older versions are cleaned automatically — and you should not keep unrelated tables in the same D1 database.
+
+> Maintenance note: when adding a new table, you must also add it to the `TABLES` whitelist at the top of the code, otherwise it will be dropped as obsolete.
 
 ## Installation
 

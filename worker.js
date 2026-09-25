@@ -13,7 +13,7 @@ const DEFAULT_BOT_ID = 'default';
 // --- 常量配置 ---
 const VERIFY_TTL_SECONDS = 3600; // 验证通过后 1 小时内免重复验证
 const CODE_TTL_SECONDS = 300;    // 验证码/题目有效期 5 分钟
-const DEDUPE_TTL_SECONDS = 7 * 24 * 3600; // 去重哈希 7 天过期
+const DEDUPE_TTL_SECONDS = 120; // 去重哈希 2 分钟过期（仅防短时刷屏，正常复述/确认不受影响）
 const TOPIC_CREATE_COOLDOWN = 600; // 同一用户建话题失败后冷却 10 分钟（防群级限流）
 const DEFAULT_LANG = 'zh';
 
@@ -273,7 +273,9 @@ async function resolveBot(env, botId) {
 
 // ---------------- D1 存储层 ----------------
 
-const TABLES = ['user_states', 'message_mappings', 'chat_topic_mappings', 'message_hashes', 'keywords', 'settings'];
+// 当前版本使用的全部表（白名单）。
+// 维护约定：新增表必须同步加进这里，否则冷启动时会被当作废弃表自动清理。
+const TABLES = ['user_states', 'message_mappings', 'chat_topic_mappings', 'message_hashes', 'keywords', 'settings', 'bots'];
 
 async function createTables(db) {
   await db.prepare(`CREATE TABLE IF NOT EXISTS user_states (
@@ -311,9 +313,10 @@ async function createTables(db) {
   await db.prepare(`CREATE INDEX IF NOT EXISTS idx_ctm_topic ON chat_topic_mappings(bot_id, topic_id)`).run();
   await db.prepare(`CREATE TABLE IF NOT EXISTS message_hashes (
     bot_id TEXT NOT NULL DEFAULT 'default',
+    chat_id TEXT NOT NULL DEFAULT '',
     hash TEXT NOT NULL,
     expires_at INTEGER,
-    PRIMARY KEY (bot_id, hash)
+    PRIMARY KEY (bot_id, chat_id, hash)
   )`).run();
   await db.prepare(`CREATE TABLE IF NOT EXISTS keywords (
     bot_id TEXT NOT NULL DEFAULT 'default',
@@ -360,6 +363,11 @@ async function doEnsureTables(db) {
   for (const name of toMigrate) {
     await db.exec(`ALTER TABLE ${name} RENAME TO _old_${name}`);
   }
+  // message_hashes 旧结构主键为 (bot_id, hash)，缺 chat_id 列；去重哈希是纯缓存，直接重建
+  const mhInfo = await db.prepare('PRAGMA table_info(message_hashes)').all();
+  if (mhInfo.results.length && !mhInfo.results.some(c => c.name === 'chat_id')) {
+    await db.exec('DROP TABLE message_hashes');
+  }
   await createTables(db);
   for (const name of toMigrate) {
     const oldCols = await db.prepare(`PRAGMA table_info(_old_${name})`).all();
@@ -375,6 +383,25 @@ async function doEnsureTables(db) {
     }
     if (!usInfo.results.some(c => c.name === 'pending_forward')) {
       await db.exec('ALTER TABLE user_states ADD COLUMN pending_forward TEXT');
+    }
+  }
+  await dropUnusedTables(db);
+}
+
+// 清理当前版本已不再使用的表（含迁移中断残留的 _old_* 临时表）。
+// 白名单为 TABLES；sqlite_/d1_ 前缀的系统表豁免，其余一律清理。
+async function dropUnusedTables(db) {
+  const keep = new Set(TABLES);
+  const rows = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
+  for (const row of rows.results) {
+    const name = row.name;
+    if (keep.has(name)) continue;
+    if (name.startsWith('sqlite_') || name.startsWith('d1_')) continue;
+    try {
+      await db.exec(`DROP TABLE IF EXISTS \`${name}\``);
+      console.log('Dropped unused table:', name);
+    } catch (e) {
+      console.log('Drop unused table failed:', name, e && e.message);
     }
   }
 }
@@ -498,6 +525,16 @@ async function sha256(message) {
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 关键词命中判定：纯 ASCII 词按词边界匹配（大小写不敏感），避免被裹进密码/账号等长串中误杀；
+// 中文词无词边界概念，仍按子串匹配。
+function keywordHit(text, word) {
+  if (/^[\x21-\x7e]+$/.test(word)) {
+    const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${esc}\\b`, 'i').test(text);
+  }
+  return text.includes(word);
 }
 
 function secureRandomInt(min, max) {
@@ -857,15 +894,15 @@ async function handleGuestMessage(bot, message) {
   // 6. 放行 -> 关键词/去重检查（仅文本，trusted 豁免）
   if (message.text && !isTrusted) {
     const keywords = await getKeywords(bot);
-    const hit = keywords.some(k => message.text.includes(k));
+    const hit = keywords.some(k => keywordHit(message.text, k));
     if (hit) return new Response('Ok');
 
     const hash = await sha256(message.text.trim());
-    const dup = await bot.db.prepare('SELECT hash FROM message_hashes WHERE bot_id = ? AND hash = ? AND (expires_at IS NULL OR expires_at > ?)')
-      .bind(bot.id, hash, now).first();
+    const dup = await bot.db.prepare('SELECT hash FROM message_hashes WHERE bot_id = ? AND chat_id = ? AND hash = ? AND (expires_at IS NULL OR expires_at > ?)')
+      .bind(bot.id, String(chatId), hash, now).first();
     if (dup) return new Response('Ok');
-    await bot.db.prepare('INSERT OR REPLACE INTO message_hashes (bot_id, hash, expires_at) VALUES (?, ?, ?)')
-      .bind(bot.id, hash, now + DEDUPE_TTL_SECONDS).run();
+    await bot.db.prepare('INSERT OR REPLACE INTO message_hashes (bot_id, chat_id, hash, expires_at) VALUES (?, ?, ?, ?)')
+      .bind(bot.id, String(chatId), hash, now + DEDUPE_TTL_SECONDS).run();
   }
 
   return forwardGuestMessage(bot, chatId, message, state, now);
