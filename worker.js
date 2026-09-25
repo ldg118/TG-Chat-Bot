@@ -1,14 +1,27 @@
-// Telegram MirroTalk Bot - Cloudflare Worker (D1 存储版)
+// Telegram MirroTalk Bot - Cloudflare Worker (D1 存储版, ES module 格式)
 // 所有数据持久化在 D1 (绑定名: DB)，首次请求自动建表，无需手动迁移。
 
-const TOKEN = ENV_BOT_TOKEN; // Get it from @BotFather
+let TOKEN = ''; // Get it from @BotFather
 const WEBHOOK = '/endpoint';
-const ADMIN_UID = ENV_ADMIN_UID; // 管理员的用户 ID (用于接收私聊通知/指令)
+let ADMIN_UID = ''; // 管理员的用户 ID (用于接收私聊通知/指令)
+let DB = null; // D1 绑定
 
-// --- 环境变量配置 ---
-const ENV_TOPIC_GROUP = (typeof ENV_ENABLE_TOPIC_GROUP !== 'undefined') && (ENV_ENABLE_TOPIC_GROUP === 'true');
-const SUPERGROUP_ID = (typeof ENV_SUPERGROUP_ID !== 'undefined') ? ENV_SUPERGROUP_ID : '';
-const MAX_MSG_PER_MIN = (typeof ENV_MAX_MSG_PER_MIN !== 'undefined') ? (parseInt(ENV_MAX_MSG_PER_MIN) || 40) : 40;
+// --- 环境变量配置 (运行时从 env 注入) ---
+let ENV_TOPIC_GROUP = false;
+let SUPERGROUP_ID = '';
+let MAX_MSG_PER_MIN = 40;
+
+// 将 env 中的配置写入模块变量（ES module 格式下不能直接引用顶层绑定变量）
+function initEnv(env) {
+  DB = env.DB;
+  TOKEN = env.ENV_BOT_TOKEN;
+  ADMIN_UID = env.ENV_ADMIN_UID;
+  ENV_TOPIC_GROUP = env.ENV_ENABLE_TOPIC_GROUP === 'true';
+  SUPERGROUP_ID = env.ENV_SUPERGROUP_ID || '';
+  MAX_MSG_PER_MIN = env.ENV_MAX_MSG_PER_MIN ? (parseInt(env.ENV_MAX_MSG_PER_MIN) || 40) : 40;
+  ENV_BOT_SECRET_VAL = env.ENV_BOT_SECRET || '';
+}
+let ENV_BOT_SECRET_VAL = '';
 const VERIFY_TTL_SECONDS = 3600; // 验证通过后 1 小时内免重复验证
 const CODE_TTL_SECONDS = 300;    // 验证码/题目有效期 5 分钟
 const DEDUPE_TTL_SECONDS = 7 * 24 * 3600; // 去重哈希 7 天过期
@@ -240,8 +253,8 @@ async function setUserState(chatId, fields) {
 
 async function getBotSecret() {
   if (cachedSecret) return cachedSecret;
-  if (typeof ENV_BOT_SECRET !== 'undefined' && ENV_BOT_SECRET) {
-    cachedSecret = ENV_BOT_SECRET;
+  if (ENV_BOT_SECRET_VAL) {
+    cachedSecret = ENV_BOT_SECRET_VAL;
     return cachedSecret;
   }
   const s = await settingGet('system:bot_secret');
@@ -411,25 +424,27 @@ async function loadRuntimeConfig() {
   };
 }
 
-addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  if (url.pathname === WEBHOOK) {
-    event.respondWith(handleWebhook(event));
-  } else if (url.pathname === '/registerWebhook') {
-    event.respondWith((async () => {
+export default {
+  async fetch(request, env, ctx) {
+    initEnv(env);
+    const url = new URL(request.url);
+    if (url.pathname === WEBHOOK) {
+      return handleWebhook(request, ctx);
+    } else if (url.pathname === '/registerWebhook') {
       const secret = await getBotSecret();
-      return registerWebhook(event, url, WEBHOOK, secret);
-    })());
-  } else if (url.pathname === '/unRegisterWebhook') {
-    event.respondWith(unRegisterWebhook(event));
-  } else {
-    event.respondWith(new Response('No handler for this request'));
-  }
-});
+      return registerWebhook(url, WEBHOOK, secret);
+    } else if (url.pathname === '/unRegisterWebhook') {
+      return unRegisterWebhook();
+    } else {
+      return new Response('No handler for this request');
+    }
+  },
 
-addEventListener('scheduled', event => {
-  event.waitUntil(handleScheduled(event));
-});
+  async scheduled(event, env, ctx) {
+    initEnv(env);
+    ctx.waitUntil(handleScheduled(event));
+  }
+};
 
 async function handleScheduled(event) {
   await ensureTables();
@@ -439,13 +454,13 @@ async function handleScheduled(event) {
   console.log('Cron cleanup done at', event.scheduledTime);
 }
 
-async function handleWebhook(event) {
+async function handleWebhook(request, ctx) {
   const secret = await getBotSecret();
-  if (event.request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== secret) {
+  if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== secret) {
     return new Response('Unauthorized', { status: 403 });
   }
-  const update = await event.request.json();
-  event.waitUntil(onUpdate(update));
+  const update = await request.json();
+  ctx.waitUntil(onUpdate(update));
   return new Response('Ok');
 }
 
@@ -1203,13 +1218,13 @@ async function handleBroadcastCommand(message) {
   }
 }
 
-async function registerWebhook(event, requestUrl, suffix, secret) {
+async function registerWebhook(requestUrl, suffix, secret) {
   const webhookUrl = `${requestUrl.protocol}//${requestUrl.hostname}${suffix}`;
   const r = await (await fetch(apiUrl('setWebhook', { url: webhookUrl, secret_token: secret }))).json();
   return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2));
 }
 
-async function unRegisterWebhook(event) {
+async function unRegisterWebhook() {
   const r = await (await fetch(apiUrl('setWebhook', { url: '' }))).json();
   return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2));
 }
