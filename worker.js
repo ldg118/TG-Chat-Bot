@@ -148,8 +148,8 @@ const STRINGS = {
   'lang.usage': { zh: '用法: <code>/lang zh</code> 或 <code>/lang en</code>', en: 'Usage: <code>/lang zh</code> or <code>/lang en</code>' },
   'lang.invalid': { zh: '⚠️ 无效参数，仅支持 zh / en。', en: '⚠️ Invalid argument. Only zh / en supported.' },
   'menu.admin': {
-    zh: '🛠 <b>管理员菜单</b>\n\n<b>当前设置:</b>\n- 🧭 模式: <b>{mode}</b>\n- 🛡 安全级别: <b>{sec}</b>\n- 🔐 验证: <b>{verify}</b>\n- 🌐 语言: <b>{lang}</b>\n\n<b>用户管理</b>\n<code>/info</code> 查看用户信息\n<code>/trust</code> 永久信任\n<code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 (Shadowban)\n<code>/unblock</code> 解除屏蔽\n<code>/blacklist</code> 查看黑名单\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 切换模式\n<code>/security 1|2|3</code> 安全级别\n<code>/verify ...</code> 验证方式 (math/custom/off)\n<code>/math ...</code> 算术题库配置\n<code>/keyword ...</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/clear</code> 清除消息映射\n<code>/notice</code> 设置用户接入须知\n<code>/welcome</code> 设置用户欢迎语\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播',
-    en: '🛠 <b>Admin Menu</b>\n\n<b>Current:</b>\n- 🧭 Mode: <b>{mode}</b>\n- 🛡 Security: <b>{sec}</b>\n- 🔐 Verify: <b>{verify}</b>\n- 🌐 Language: <b>{lang}</b>\n\n<b>Users</b>\n<code>/info</code> user info\n<code>/trust</code> trust user\n<code>/untrust</code> remove trust\n<code>/block</code> shadowban\n<code>/unblock</code> unblock\n<code>/blacklist</code> view blacklist\n\n<b>System</b>\n<code>/mode private|topic</code> switch mode\n<code>/security 1|2|3</code> level\n<code>/verify ...</code> math/custom/off\n<code>/math ...</code> math config\n<code>/keyword ...</code> keyword blacklist\n<code>/lang zh|en</code> UI language\n<code>/clear</code> clear mappings\n<code>/notice</code> set welcome notice\n<code>/welcome</code> set welcome message\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg to broadcast'
+    zh: '🛠 <b>管理员菜单</b>\n\n<b>当前设置:</b>\n- 🧭 模式: <b>{mode}</b>\n- 🛡 安全级别: <b>{sec}</b>\n- 🔐 验证: <b>{verify}</b>\n- 📃 关键词: <b>{kw}</b>\n- 🌐 语言: <b>{lang}</b>\n\n<b>用户管理</b>\n<code>/info</code> 查看用户信息\n<code>/trust</code> 永久信任\n<code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 (Shadowban)\n<code>/unblock</code> 解除屏蔽\n<code>/blacklist</code> 查看黑名单\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 切换模式\n<code>/security 1|2|3</code> 安全级别\n<code>/verify ...</code> 验证方式 (math/custom/off)\n<code>/math ...</code> 算术题库配置\n<code>/keyword ...</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/clear</code> 清除消息映射\n<code>/notice</code> 设置用户接入须知\n<code>/welcome</code> 设置用户欢迎语\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播',
+    en: '🛠 <b>Admin Menu</b>\n\n<b>Current:</b>\n- 🧭 Mode: <b>{mode}</b>\n- 🛡 Security: <b>{sec}</b>\n- 🔐 Verify: <b>{verify}</b>\n- 📃 Keywords: <b>{kw}</b>\n- 🌐 Language: <b>{lang}</b>\n\n<b>Users</b>\n<code>/info</code> user info\n<code>/trust</code> trust user\n<code>/untrust</code> remove trust\n<code>/block</code> shadowban\n<code>/unblock</code> unblock\n<code>/blacklist</code> view blacklist\n\n<b>System</b>\n<code>/mode private|topic</code> switch mode\n<code>/security 1|2|3</code> level\n<code>/verify ...</code> math/custom/off\n<code>/math ...</code> math config\n<code>/keyword ...</code> keyword blacklist\n<code>/lang zh|en</code> UI language\n<code>/clear</code> clear mappings\n<code>/notice</code> set welcome notice\n<code>/welcome</code> set welcome message\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg to broadcast'
   },
   'topic.reply_hint': {
     zh: '⚠️ 该话题尚未绑定用户或映射异常。请先在本话题里回复一条“来自该用户的转发消息”发送任意内容，系统会自动完成绑定。',
@@ -1308,6 +1308,15 @@ async function handleAdminMenu(bot, message) {
   const verifyText = t(bot, 'verify.show.mode.' + bot.verifyMode);
   const langText = bot.lang === 'zh' ? '中文' : 'English';
 
+  // 关键词概要：总数 + 默认数 + 前几个词预览
+  const words = await getKeywords(bot);
+  const defaultSet = new Set(DEFAULT_KEYWORDS);
+  const defaultCount = words.filter(w => defaultSet.has(w)).length;
+  const preview = words.slice(0, 6).map(w => escapeHtml(w)).join('、') + (words.length > 6 ? ' …' : '');
+  const kwText = words.length
+    ? (bot.lang === 'zh' ? `${words.length} 个（默认 ${defaultCount}）: ${preview}` : `${words.length} (${defaultCount} default): ${preview}`)
+    : '0';
+
   // 内联按钮：点击即执行（用户管理指令需回复目标消息，或作用于最近来消息的用户）
   const inline_keyboard = [
     [
@@ -1343,7 +1352,7 @@ async function handleAdminMenu(bot, message) {
 
   return sendMessage(bot, {
     chat_id: message.chat.id,
-    text: t(bot, 'menu.admin', { mode: modeText, sec: secText, verify: verifyText, lang: langText }),
+    text: t(bot, 'menu.admin', { mode: modeText, sec: secText, verify: verifyText, lang: langText, kw: kwText }),
     parse_mode: 'HTML',
     message_thread_id: message.message_thread_id,
     reply_markup: { inline_keyboard }
