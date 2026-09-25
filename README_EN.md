@@ -106,6 +106,22 @@ Set one environment variable `ENV_BOTS` to a JSON array listing all bots.
 - After changing a bot's `token`/`admin` in `ENV_BOTS`, re-visit its `registerWebhook` URL for the change to take effect
 - Admin commands (`/admin`, `/block`, etc.) work independently in each bot, acting on that bot's own users
 
+### Add bots from the admin panel (no Cloudflare needed)
+
+After deploying once, adding bots no longer requires touching Cloudflare. Use `/bot` commands in the admin panel (`/admin`) — configs are stored in D1 and the webhook is **auto-registered**, ready immediately:
+
+```
+/bot list                                        → show added bots
+/bot add support 123:ABC 222222222                → add (id token admin_uid)
+/bot add vip 456:DEF 333333333 -100xxx topic 40   → topic mode + custom rate limit
+/bot del support                                 → delete + auto-unregister webhook
+/bot set support token 789:GHI                   → update field (token/admin/sg/max)
+```
+
+- Token validity is checked on add; invalid tokens are not saved. Messages containing tokens are auto-deleted.
+- D1 bots take precedence over `ENV_BOTS`; same-id entries in D1 win.
+- The initial `default` bot still needs one manual visit to `/registerWebhook` (it can't register itself).
+
 ## Operating Modes
 
 ### 1. Private Chat Mode (Default)
@@ -171,6 +187,8 @@ Send `/admin` in the Supergroup to see the control panel:
 - **/lang <zh|en>**: Switch UI language.
 - **/clear**: Clear message mappings for a user (reply to their message or send in their topic); `/clear all` wipes all mappings.
 - **/mode <private|topic>**: Switch operating mode.
+- **/bot list|add|del|set**: Manage multiple bots from the admin panel (stored in D1, webhook auto-registered, no Cloudflare needed).
+- **/help**: Show the full command reference.
 
 ## Data Storage (D1)
 

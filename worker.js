@@ -148,9 +148,31 @@ const STRINGS = {
   'lang.usage': { zh: '用法: <code>/lang zh</code> 或 <code>/lang en</code>', en: 'Usage: <code>/lang zh</code> or <code>/lang en</code>' },
   'lang.invalid': { zh: '⚠️ 无效参数，仅支持 zh / en。', en: '⚠️ Invalid argument. Only zh / en supported.' },
   'menu.admin': {
-    zh: '🛠 <b>管理员菜单</b>\n\n<b>当前设置:</b>\n- 🧭 模式: <b>{mode}</b>\n- 🛡 安全级别: <b>{sec}</b>\n- 🔐 验证: <b>{verify}</b>\n- 📃 关键词: <b>{kw}</b>\n- 🌐 语言: <b>{lang}</b>\n\n<b>用户管理</b>\n<code>/info</code> 查看用户信息\n<code>/trust</code> 永久信任\n<code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 (Shadowban)\n<code>/unblock</code> 解除屏蔽\n<code>/blacklist</code> 查看黑名单\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 切换模式\n<code>/security 1|2|3</code> 安全级别\n<code>/verify ...</code> 验证方式 (math/custom/off)\n<code>/math ...</code> 算术题库配置\n<code>/keyword ...</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/clear</code> 清除消息映射\n<code>/notice</code> 设置用户接入须知\n<code>/welcome</code> 设置用户欢迎语\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播',
-    en: '🛠 <b>Admin Menu</b>\n\n<b>Current:</b>\n- 🧭 Mode: <b>{mode}</b>\n- 🛡 Security: <b>{sec}</b>\n- 🔐 Verify: <b>{verify}</b>\n- 📃 Keywords: <b>{kw}</b>\n- 🌐 Language: <b>{lang}</b>\n\n<b>Users</b>\n<code>/info</code> user info\n<code>/trust</code> trust user\n<code>/untrust</code> remove trust\n<code>/block</code> shadowban\n<code>/unblock</code> unblock\n<code>/blacklist</code> view blacklist\n\n<b>System</b>\n<code>/mode private|topic</code> switch mode\n<code>/security 1|2|3</code> level\n<code>/verify ...</code> math/custom/off\n<code>/math ...</code> math config\n<code>/keyword ...</code> keyword blacklist\n<code>/lang zh|en</code> UI language\n<code>/clear</code> clear mappings\n<code>/notice</code> set welcome notice\n<code>/welcome</code> set welcome message\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg to broadcast'
+    zh: '🛠 <b>管理面板</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 关键词 {kw} | 🌐 {lang}\n\n点击下方按钮直接执行；输入 <code>/</code> 可唤起命令菜单；<code>/help</code> 查看全部指令说明。',
+    en: '🛠 <b>Admin Panel</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 Keywords {kw} | 🌐 {lang}\n\nTap buttons below to execute; type <code>/</code> for the command menu; <code>/help</code> for the full list.'
   },
+  'help.text': {
+    zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|custom 问题|答案|off|show</code> 验证方式\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）\n<code>/notice 文本</code> 用户接入须知\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
+    en: '� <b>Command Reference</b>\n\n<b>Users</b> (reply to their msg or send in their topic)\n<code>/info</code> | <code>/trust</code> | <code>/untrust</code>\n<code>/block</code> | <code>/unblock</code> | <code>/blacklist</code>\n<code>/clear</code> user mappings | <code>/clear all</code>\n\n<b>System</b>\n<code>/mode private|topic</code>\n<code>/security 1|2|3</code> strict|standard|relaxed\n<code>/verify math|custom q|a|off|show</code>\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code>\n<code>/keyword list|add w|del w|reset</code>\n<code>/lang zh|en</code>\n<code>/welcome text</code> (supports {uid})\n<code>/notice text</code>\n\n<b>Bots</b>\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code> | <code>/bot set id token|admin|sg|max value</code>\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg (skips blocked users)'
+  },
+  'bot.usage': {
+    zh: '用法:\n<code>/bot list</code> 查看机器人\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加\n<code>/bot del id</code> 删除\n<code>/bot set id token|admin|sg|max 值</code> 修改',
+    en: 'Usage:\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code>\n<code>/bot set id token|admin|sg|max value</code>'
+  },
+  'bot.list.title': { zh: '机器人列表', en: 'Bot list' },
+  'bot.list.empty': { zh: '（D1 中暂无记录，当前仅环境变量配置的机器人）', en: '(no bots in D1; env-configured bots only)' },
+  'bot.list.usage': { zh: '<i>添加: /bot add id token UID [sg] [topic] [max]</i>', en: '<i>Add: /bot add id token UID [sg] [topic] [max]</i>' },
+  'bot.add.usage': { zh: '用法: <code>/bot add id token 管理员UID [群组ID] [topic] [max]</code>', en: 'Usage: <code>/bot add id token ADMIN_UID [sg] [topic] [max]</code>' },
+  'bot.add.exists': { zh: '⚠️ 机器人 <code>{id}</code> 已存在。', en: '⚠️ Bot <code>{id}</code> already exists.' },
+  'bot.add.ok': { zh: '✅ 机器人 <code>{id}</code> ({name}) 已添加并自动注册 webhook，可直接使用。', en: '✅ Bot <code>{id}</code> ({name}) added and webhook auto-registered. Ready to use.' },
+  'bot.add.fail': { zh: '❌ 添加失败（token 无效？）: {err}', en: '❌ Add failed (invalid token?): {err}' },
+  'bot.add.webhook_fail': { zh: '⚠️ 机器人 <code>{id}</code> 已保存，但 webhook 注册失败: {err}\n请稍后手动访问 /registerWebhook/{id}', en: '⚠️ Bot <code>{id}</code> saved but webhook registration failed: {err}\nVisit /registerWebhook/{id} manually later.' },
+  'bot.del.usage': { zh: '用法: <code>/bot del id</code>', en: 'Usage: <code>/bot del id</code>' },
+  'bot.del.self': { zh: '⚠️ 不能删除当前正在使用的机器人。', en: '⚠️ Cannot delete the bot you are using now.' },
+  'bot.del.ok': { zh: '🗑 机器人 <code>{id}</code> 已删除并注销 webhook。', en: '🗑 Bot <code>{id}</code> deleted and webhook unregistered.' },
+  'bot.notfound': { zh: '⚠️ 未找到机器人 <code>{id}</code>。', en: '⚠️ Bot <code>{id}</code> not found.' },
+  'bot.set.usage': { zh: '用法: <code>/bot set id token|admin|sg|max 值</code>', en: 'Usage: <code>/bot set id token|admin|sg|max value</code>' },
+  'bot.set.ok': { zh: '✅ 已更新机器人 <code>{id}</code> 的 <code>{f}</code>。如改 token/admin 请重新注册 webhook。', en: '✅ Updated <code>{f}</code> for bot <code>{id}</code>. Re-register webhook if token/admin changed.' },
   'topic.reply_hint': {
     zh: '⚠️ 该话题尚未绑定用户或映射异常。请先在本话题里回复一条“来自该用户的转发消息”发送任意内容，系统会自动完成绑定。',
     en: '⚠️ This topic has no bound user. Reply to a forwarded message from that user to auto-bind.'
@@ -202,17 +224,27 @@ function parseBots(env) {
   return bots;
 }
 
-// 构建带机器人上下文与已加载配置的 bot 对象
+// Worker 自身域名（用于面板内自动注册 webhook）
+let WORKER_ORIGIN = '';
+
+// 构建带机器人上下文与已加载配置的 bot 对象。优先读 D1 bots 表（面板管理），回退到 ENV_BOTS 环境变量。
 async function resolveBot(env, botId) {
-  const cfg = parseBots(env)[botId];
-  if (!cfg) return null;
+  let cfg = null;
+  if (env.DB) {
+    cfg = await env.DB.prepare('SELECT * FROM bots WHERE bot_id = ?').bind(botId).first();
+  }
+  if (!cfg) {
+    const fromEnv = parseBots(env)[botId];
+    if (!fromEnv) return null;
+    cfg = { bot_id: fromEnv.id, token: fromEnv.token, admin_uid: String(fromEnv.admin || ''), sg: String(fromEnv.sg || ''), topic: (fromEnv.topic === true || fromEnv.topic === 'true') ? 1 : 0, max: fromEnv.max, secret: fromEnv.secret || '' };
+  }
   const bot = {
     id: botId,
     db: env.DB,
     token: cfg.token,
-    adminUid: String(cfg.admin || ''),
+    adminUid: String(cfg.admin_uid || ''),
     supergroupId: String(cfg.sg || ''),
-    defaultTopicMode: cfg.topic === true || cfg.topic === 'true',
+    defaultTopicMode: !!cfg.topic,
     maxPerMin: cfg.max ? (parseInt(cfg.max) || 40) : 40,
     secretEnv: cfg.secret || '',
     lang: DEFAULT_LANG,
@@ -288,6 +320,16 @@ async function createTables(db) {
     key TEXT NOT NULL,
     value TEXT,
     PRIMARY KEY (bot_id, key)
+  )`).run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS bots (
+    bot_id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    admin_uid TEXT NOT NULL DEFAULT '',
+    sg TEXT NOT NULL DEFAULT '',
+    topic INTEGER DEFAULT 0,
+    max INTEGER DEFAULT 40,
+    secret TEXT NOT NULL DEFAULT '',
+    created_at INTEGER
   )`).run();
 }
 
@@ -492,6 +534,7 @@ export default {
       await ensureTables(env.DB);
     }
     const url = new URL(request.url);
+    WORKER_ORIGIN = `${url.protocol}//${url.hostname}`;
     const p = url.pathname;
     let m;
 
@@ -594,7 +637,8 @@ async function onMessage(bot, message) {
 
 // 指令分发：文本指令与内联按钮共用。返回 Response 表示已处理，返回 undefined 表示非指令。
 async function dispatchAdminCommand(bot, text, message) {
-  if (text.startsWith('/help') || text.startsWith('/admin')) return handleAdminMenu(bot, message);
+  if (text.startsWith('/help')) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'help.text'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  if (text.startsWith('/admin')) return handleAdminMenu(bot, message);
   if (text.startsWith('/mode')) return handleModeCommand(bot, message);
   if (text.startsWith('/info')) return handleInfoCommand(bot, message);
   if (text.startsWith('/trust')) return handleTrustCommand(bot, message);
@@ -611,6 +655,7 @@ async function dispatchAdminCommand(bot, text, message) {
   if (text.startsWith('/clear')) return handleClearCommand(bot, message);
   if (text.startsWith('/notice')) return handleNoticeCommand(bot, message);
   if (text.startsWith('/welcome')) return handleWelcomeCommand(bot, message);
+  if (text.startsWith('/bot')) return handleBotCommand(bot, message);
   return undefined;
 }
 
@@ -1308,45 +1353,48 @@ async function handleAdminMenu(bot, message) {
   const verifyText = t(bot, 'verify.show.mode.' + bot.verifyMode);
   const langText = bot.lang === 'zh' ? '中文' : 'English';
 
-  // 关键词概要：总数 + 默认数 + 前几个词预览
+  // 关键词概要：总数 + 默认数
   const words = await getKeywords(bot);
   const defaultSet = new Set(DEFAULT_KEYWORDS);
   const defaultCount = words.filter(w => defaultSet.has(w)).length;
-  const preview = words.slice(0, 6).map(w => escapeHtml(w)).join('、') + (words.length > 6 ? ' …' : '');
-  const kwText = words.length
-    ? (bot.lang === 'zh' ? `${words.length} 个（默认 ${defaultCount}）: ${preview}` : `${words.length} (${defaultCount} default): ${preview}`)
-    : '0';
+  const kwText = bot.lang === 'zh' ? `${words.length}(默认${defaultCount})` : `${words.length}(${defaultCount} def)`;
 
-  // 内联按钮：点击即执行（用户管理指令需回复目标消息，或作用于最近来消息的用户）
+  // 纯按钮面板：点击即执行（用户管理指令需回复目标消息，或作用于最近来消息的用户）
   const inline_keyboard = [
     [
-      { text: 'ℹ️ /info', callback_data: 'cmd:/info' },
-      { text: '🌟 /trust', callback_data: 'cmd:/trust' },
-      { text: '🚫 /block', callback_data: 'cmd:/block' }
+      { text: 'ℹ️ 信息', callback_data: 'cmd:/info' },
+      { text: '🌟 信任', callback_data: 'cmd:/trust' },
+      { text: '🚫 屏蔽', callback_data: 'cmd:/block' },
+      { text: '✅ 解屏', callback_data: 'cmd:/unblock' }
     ],
     [
-      { text: '✅ /unblock', callback_data: 'cmd:/unblock' },
-      { text: '📃 /blacklist', callback_data: 'cmd:/blacklist' },
-      { text: '🗑 /clear', callback_data: 'cmd:/clear' }
+      { text: '📃 黑名单', callback_data: 'cmd:/blacklist' },
+      { text: '📃 关键词', callback_data: 'cmd:/keyword list' },
+      { text: '🗑 清除', callback_data: 'cmd:/clear' },
+      { text: '📢 广播', callback_data: 'cmd:/broadcast' }
     ],
     [
       { text: '🧭 私聊模式', callback_data: 'cmd:/mode private' },
-      { text: '🧭 话题模式', callback_data: 'cmd:/mode topic' }
+      { text: '🧭 话题模式', callback_data: 'cmd:/mode topic' },
+      { text: '🔐 验证配置', callback_data: 'cmd:/verify show' },
+      { text: '🧮 题库配置', callback_data: 'cmd:/math show' }
     ],
     [
       { text: '🛡 严格', callback_data: 'cmd:/security 1' },
       { text: '🛡 标准', callback_data: 'cmd:/security 2' },
-      { text: '🛡 宽松', callback_data: 'cmd:/security 3' }
+      { text: '🛡 宽松', callback_data: 'cmd:/security 3' },
+      { text: '🔐 关闭验证', callback_data: 'cmd:/verify off' }
     ],
     [
-      { text: '🔐 算术验证', callback_data: 'cmd:/verify math' },
-      { text: '🔐 关闭验证', callback_data: 'cmd:/verify off' },
-      { text: '🔐 验证配置', callback_data: 'cmd:/verify show' }
-    ],
-    [
+      { text: '💬 欢迎语', callback_data: 'cmd:/welcome' },
+      { text: '📣 接入须知', callback_data: 'cmd:/notice' },
       { text: '🌐 中文', callback_data: 'cmd:/lang zh' },
-      { text: '🌐 English', callback_data: 'cmd:/lang en' },
-      { text: '🛠 刷新菜单', callback_data: 'cmd:/admin' }
+      { text: '🌐 EN', callback_data: 'cmd:/lang en' }
+    ],
+    [
+      { text: '🤖 机器人管理', callback_data: 'cmd:/bot list' },
+      { text: '📖 帮助', callback_data: 'cmd:/help' },
+      { text: '🔄 刷新', callback_data: 'cmd:/admin' }
     ]
   ];
 
@@ -1357,6 +1405,124 @@ async function handleAdminMenu(bot, message) {
     message_thread_id: message.message_thread_id,
     reply_markup: { inline_keyboard }
   });
+}
+
+// ---------------- 机器人管理（/bot） ----------------
+
+async function autoRegisterWebhook(bot) {
+  const secret = await getBotSecret(bot);
+  const path = bot.id === DEFAULT_BOT_ID ? WEBHOOK : `${WEBHOOK}/${bot.id}`;
+  const webhookUrl = `${WORKER_ORIGIN}${path}`;
+  const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: webhookUrl, secret_token: secret }))).json();
+  await requestTelegram(bot, 'setMyCommands', makeReqBody({
+    commands: [
+      { command: 'admin', description: '管理面板 / Admin panel' },
+      { command: 'info', description: '用户信息 / User info' },
+      { command: 'block', description: '屏蔽用户 / Block user' },
+      { command: 'unblock', description: '解除屏蔽 / Unblock' },
+      { command: 'blacklist', description: '黑名单 / Blacklist' },
+      { command: 'clear', description: '清除映射 / Clear mappings' },
+      { command: 'notice', description: '接入须知 / Welcome notice' },
+      { command: 'welcome', description: '用户欢迎语 / Welcome msg' },
+      { command: 'mode', description: '切换模式 / Switch mode' },
+      { command: 'security', description: '安全级别 / Security level' },
+      { command: 'verify', description: '验证设置 / Verification' },
+      { command: 'math', description: '题库设置 / Math config' },
+      { command: 'keyword', description: '关键词 / Keywords' },
+      { command: 'lang', description: '语言 / Language' },
+      { command: 'broadcast', description: '广播 / Broadcast' },
+      { command: 'bot', description: '机器人管理 / Bot manager' },
+      { command: 'start', description: '开始 / Start' }
+    ]
+  }));
+  return r;
+}
+
+async function handleBotCommand(bot, message) {
+  const parts = message.text.trim().split(/\s+/);
+  const sub = (parts[1] || 'list').toLowerCase();
+
+  if (sub === 'list') {
+    const res = await bot.db.prepare('SELECT bot_id, admin_uid, sg, topic, max FROM bots ORDER BY bot_id').all();
+    let text = `🤖 <b>${t(bot, 'bot.list.title')}</b>\n`;
+    const rows = [];
+    for (const r of res.results) {
+      rows.push(`<code>${escapeHtml(r.bot_id)}</code> — ${r.topic ? t(bot, 'mode.topic') : t(bot, 'mode.private')}${r.sg ? ` | sg: <code>${escapeHtml(r.sg)}</code>` : ''}`);
+    }
+    if (!rows.length) text += t(bot, 'bot.list.empty');
+    else text += rows.join('\n');
+    text += `\n${t(bot, 'bot.list.usage')}`;
+    return sendMessage(bot, { chat_id: message.chat.id, text, parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  }
+
+  if (sub === 'add') {
+    // /bot add <id> <token> <admin_uid> [sg] [topic] [max]
+    const [, , id, token, admin, sg, topicFlag, maxStr] = message.text.trim().split(/\s+/);
+    if (!id || !token || !admin || !/^[a-z0-9_-]{1,32}$/.test(id)) {
+      return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.add.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    }
+    const exists = await bot.db.prepare('SELECT bot_id FROM bots WHERE bot_id = ?').bind(id).first();
+    if (exists) {
+      return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.add.exists', { id }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    }
+    const secret = crypto.randomUUID().replace(/-/g, '');
+    const topic = (topicFlag === 'topic' || topicFlag === 'true') ? 1 : 0;
+    const max = parseInt(maxStr) || 40;
+    await bot.db.prepare('INSERT INTO bots (bot_id, token, admin_uid, sg, topic, max, secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, token, String(admin), sg || '', topic, max, secret, Math.floor(Date.now() / 1000)).run();
+    // 验证 token 有效性并自动注册 webhook
+    const newBot = await resolveBot({ DB: bot.db }, id);
+    let resultText;
+    if (!newBot) {
+      resultText = t(bot, 'bot.add.fail', { err: 'resolve error' });
+    } else {
+      const me = await requestTelegram(newBot, 'getMe', makeReqBody({}));
+      if (!me.ok) {
+        await bot.db.prepare('DELETE FROM bots WHERE bot_id = ?').bind(id).run();
+        resultText = t(bot, 'bot.add.fail', { err: me.description || 'invalid token' });
+      } else {
+        const r = await autoRegisterWebhook(newBot);
+        resultText = r.ok
+          ? t(bot, 'bot.add.ok', { id, name: '@' + (me.result.username || id) })
+          : t(bot, 'bot.add.webhook_fail', { id, err: r.description || 'unknown' });
+      }
+    }
+    // 删除含 token 的原始消息（防泄露）
+    try { await deleteMessage(bot, message.chat.id, message.message_id); } catch (e) { /* ignore */ }
+    return sendMessage(bot, { chat_id: message.chat.id, text: resultText, parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  }
+
+  if (sub === 'del') {
+    const id = parts[2];
+    if (!id) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.del.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    if (id === bot.id) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.del.self'), message_thread_id: message.message_thread_id });
+    const row = await bot.db.prepare('SELECT token FROM bots WHERE bot_id = ?').bind(id).first();
+    if (!row) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.notfound', { id }), message_thread_id: message.message_thread_id });
+    try {
+      const fake = { id, token: row.token };
+      await fetch(apiUrl(fake, 'setWebhook', { url: '' }));
+    } catch (e) { /* ignore */ }
+    await bot.db.prepare('DELETE FROM bots WHERE bot_id = ?').bind(id).run();
+    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.del.ok', { id }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  }
+
+  if (sub === 'set') {
+    const id = parts[2], field = (parts[3] || '').toLowerCase();
+    const value = parts.slice(4).join(' ');
+    if (!id || !field || !value) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.set.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    const row = await bot.db.prepare('SELECT bot_id FROM bots WHERE bot_id = ?').bind(id).first();
+    if (!row) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.notfound', { id }), message_thread_id: message.message_thread_id });
+    const colMap = { token: 'token', admin: 'admin_uid', sg: 'sg', max: 'max' };
+    const col = colMap[field];
+    if (!col) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.set.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    let v = value;
+    if (col === 'max') { v = parseInt(value); if (!Number.isFinite(v) || v < 1) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.set.usage'), message_thread_id: message.message_thread_id }); }
+    await bot.db.prepare(`UPDATE bots SET ${col} = ? WHERE bot_id = ?`).bind(v, id).run();
+    try { await deleteMessage(bot, message.chat.id, message.message_id); } catch (e) { /* ignore */ }
+    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.set.ok', { id, f: field }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  }
+
+  return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
 async function handleBroadcastCommand(bot, message) {

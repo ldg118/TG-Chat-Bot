@@ -96,6 +96,22 @@
 - 改了 `ENV_BOTS` 里某个机器人的 `token`/`admin` 后，需要重新访问它的 `registerWebhook` 地址让配置生效
 - 管理员指令（`/admin`、`/block` 等）在每个机器人里独立可用，作用于该机器人自己的用户
 
+### 在管理面板直接添加机器人（免 Cloudflare 操作）
+
+部署一次后，日常加机器人**不需要再进 Cloudflare**。在 bot 的管理面板（`/admin`）里用 `/bot` 指令即可，新机器人配置存入 D1 并**自动注册 webhook**，加完立刻能用：
+
+```
+/bot list                                        → 查看已添加的机器人
+/bot add support 123:ABC 222222222                → 添加（id token 管理员UID）
+/bot add vip 456:DEF 333333333 -100xxx topic 40   → 话题模式 + 自定义限流
+/bot del support                                 → 删除并自动注销 webhook
+/bot set support token 789:GHI                   → 修改字段（token/admin/sg/max）
+```
+
+- 添加时自动验证 token 有效性，无效不会保存；含 token 的消息会被自动删除防泄露
+- D1 里的机器人**优先于** `ENV_BOTS` 环境变量；同名时以 D1 为准
+- 首次部署的 default 机器人仍需手动访问一次 `/registerWebhook`（它无法自己注册自己）
+
 ## 运行模式
 
 ### 1. 私聊模式 (默认)
@@ -159,8 +175,10 @@
 - **/math ops +-*/** / **/math range 1 9** / **/math count 4** / **/math show**：配置算术题库（运算类型、操作数范围、选项按钮数）。
 - **/keyword list|add 词|del 词|reset**：管理关键词黑名单。
 - **/lang <zh|en>**：切换界面语言。
-- **/clear**：清除指定用户的消息映射（回复其消息或在其话题内发送）；`/clear all` 清空全部映射。
+- **/clear**：清除指定用户的消息映射（回复其消息或在其话题内发送）；`/clear all` 清空全部映射
 - **/mode <private|topic>**：切换运行模式。
+- **/bot list|add|del|set**：在面板内管理多个机器人（存入 D1 并自动注册 webhook，免 Cloudflare 操作）。
+- **/help**：查看全部指令说明。
 
 ### 权限系统深入理解 (/trust vs /block vs /unblock)
 
