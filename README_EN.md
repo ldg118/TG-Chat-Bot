@@ -190,7 +190,7 @@ Every table uses `bot_id` as the first primary-key column to isolate data betwee
 4.  **Deploy**: click the "Deploy to Cloudflare Workers" button above, or create a Worker and paste `worker.js`.
 5.  **Configure**: add the environment variables under Settings → Variables, and a D1 binding named **`D1`** under Settings → Bindings.
 6.  **Register Webhook**: visit `https://your-domain.workers.dev/registerWebhook`.
-7.  **(Optional) Cron**: add `0 0 * * *` under Triggers to clean expired dedupe hashes daily.
+7.  **(Optional) Cron**: add `0 0 * * *` under Triggers to clean expired dedupe hashes and reset expired verification state daily (permanent state such as blacklist/trust is never removed).
 
 ## Acknowledgements
 

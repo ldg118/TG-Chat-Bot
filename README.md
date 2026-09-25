@@ -211,7 +211,7 @@ Webhook 接收路径为 `/endpoint`（单机器人）；多机器人各用 `/end
 4.  **部署**：点击上方的 "Deploy to Cloudflare Workers" 按钮，或在 Workers 控制台新建 Worker 后粘贴 `worker.js` 内容。
 5.  **配置**：Settings → Variables 填入环境变量；Settings → Bindings 添加 D1 绑定（**绑定名 `D1`**）。
 6.  **注册 Webhook**：访问 `https://你的域名.workers.dev/registerWebhook`。
-7.  **（可选）Cron**：Triggers 中添加每日定时 `0 0 * * *`，用于清理过期去重哈希。
+7.  **（可选）Cron**：Triggers 中添加每日定时 `0 0 * * *`，用于清理过期去重哈希并重置过期的验证状态（不清除黑名单/信任等永久状态）。
 
 ## 致谢与参考
 

@@ -744,8 +744,13 @@ async function handleScheduled(env, event) {
   const db = env.D1;
   await ensureTables(db);
   const now = Math.floor(Date.now() / 1000);
+  // 清理过期的去重哈希（查询侧本就按 expires_at 过滤，这里只是防止表无限增长）
   await db.prepare('DELETE FROM message_hashes WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now).run();
-  await db.prepare('DELETE FROM user_states WHERE pending_code_expiry > 0 AND pending_code_expiry < ?').bind(now).run();
+  // 清理过期的验证状态：只重置 pending_* 字段，不能删整行。
+  // user_states 里还存着黑名单/信任/信息卡标记等永久状态，删行会把它们一起抹掉。
+  await db.prepare(`UPDATE user_states SET pending_answer = NULL, pending_question = NULL,
+    pending_code_expiry = 0, pending_attempts = 0, pending_msg_id = 0, pending_forward = NULL
+    WHERE pending_code_expiry > 0 AND pending_code_expiry < ?`).bind(now).run();
   console.log('Cron cleanup done at', event ? event.scheduledTime : Date.now());
 }
 
