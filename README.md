@@ -1,4 +1,4 @@
-# Telegram MirroTalk Bot
+# TG Chat Bot
 
  [English](README_EN.md) | [中文](README.md)
 
@@ -24,7 +24,7 @@
 
 ## 部署到 Cloudflare Workers
 
-<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/tanaer/Telegram_MirroTalk">
+<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/ldg118/TG-Chat-Bot">
   <img src="https://camo.githubusercontent.com/aa3de9a0130879a84691a2286f5302105d5f3554c5d0af4e3f2f24174eeeea25/68747470733a2f2f6465706c6f792e776f726b6572732e636c6f7564666c6172652e636f6d2f627574746f6e" alt="Deploy to Cloudflare Workers" />
 </a>
 
@@ -192,3 +192,12 @@ D1 免费版额度（10 万行写/天、5GB）远超原 KV 方案（1000 次写/
 3.  **部署**：点击上方的 "Deploy with Workers" 按钮。
 4.  **绑定 D1**：创建 D1 数据库（控制台或 `wrangler d1 create mirrotalk`），将 `database_id` 填入 `wrangler.toml`，并在 Worker 设置中添加 binding 名为 `DB` 的 D1 绑定。表结构首次请求时自动创建。
 5.  **设置 Webhook**：部署完成后，访问以下链接注册 Webhook：`https://你的-worker-子域名.workers.dev/registerWebhook`
+
+## 致谢与参考
+
+本项目在以下两个优秀开源项目的基础上开发，特此感谢：
+
+- **[tanaer/Telegram_MirroTalk](https://github.com/tanaer/Telegram_MirroTalk)** —— 本项目的原始基础，提供了 Telegram 消息转发机器人的核心架构（消息转发、防骚扰、管理指令等）。
+- **[iawooo/ctt (CFTeleTrans)](https://github.com/iawooo/ctt)** —— 借鉴了其 D1 数据库表结构设计、验证状态持久化与频率限制机制、webhook 去重与话题创建锁，以及话题模式的用户信息卡设计。
+
+主要改进：存储层由 KV 全面迁移至 D1（消息映射永久保存）、验证 1 小时持久化免重复、频率限制触发重验证、管理面板分类化与内联按钮、多机器人面板管理、双语界面、关键词/验证方式/题库/欢迎语指令化配置等。

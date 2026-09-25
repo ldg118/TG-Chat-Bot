@@ -1,4 +1,4 @@
-# Telegram MirroTalk Bot
+# TG Chat Bot
 
 [English](README_EN.md) | [中文](README.md)
 
@@ -34,7 +34,7 @@ A Telegram message forwarding bot running on Cloudflare Workers, with anti-spam 
 
 ## Deploy to Cloudflare Workers
 
-<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/tanaer/Telegram_MirroTalk">
+<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/ldg118/TG-Chat-Bot">
   <img src="https://camo.githubusercontent.com/aa3de9a0130879a84691a2286f5302105d5f3554c5d0af4e3f2f24174eeeea25/68747470733a2f2f6465706c6f792e776f726b6572732e636c6f7564666c6172652e636f6d2f627574746f6e" alt="Deploy to Cloudflare Workers" />
 </a>
 
@@ -188,3 +188,12 @@ The D1 free tier (100k writes/day, 5GB) far exceeds the old KV limits (1,000 wri
 3.  **Deploy**: Click the "Deploy with Workers" button above.
 4.  **Bind D1**: Create a D1 database (console or `wrangler d1 create mirrotalk`), fill the `database_id` into `wrangler.toml`, and add a D1 binding named `DB` in your Worker settings. Tables are created automatically on first request.
 5.  **Set Webhook**: After deployment, visit `https://your-worker-subdomain.workers.dev/registerWebhook` to register the webhook.
+
+## Acknowledgements
+
+This project is built upon and inspired by the following excellent open-source projects:
+
+- **[tanaer/Telegram_MirroTalk](https://github.com/tanaer/Telegram_MirroTalk)** — the original base of this project, providing the core architecture of the Telegram message forwarding bot (forwarding, anti-spam, admin commands, etc.).
+- **[iawooo/ctt (CFTeleTrans)](https://github.com/iawooo/ctt)** — from which we adopted the D1 database schema design, verification persistence & rate-limiting mechanism, webhook dedupe with topic-creation locks, and the topic-mode user info card.
+
+Key improvements: full migration from KV to D1 (permanent message mappings), 1-hour verification persistence, rate-limit-triggered re-verification, categorized admin panel with inline buttons, multi-bot management from the panel, bilingual UI, and command-driven configuration for keywords / verification / math bank / welcome message.

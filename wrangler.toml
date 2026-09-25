@@ -1,4 +1,4 @@
-name = "telegram-mirrotalk"
+name = "tg-chat-bot"
 main = "worker.js"
 compatibility_date = "2023-10-30"
 
