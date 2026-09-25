@@ -43,8 +43,8 @@ const STRINGS = {
   'mode.topic': { zh: '话题群组模式', en: 'Topic Group' },
   'mode.private': { zh: '私聊模式', en: 'Private Chat' },
   'mode.warn.nosg': {
-    zh: '⚠️ <b>配置警告</b>: 已开启话题模式但未设置 sg (超级群组 ID)。',
-    en: '⚠️ <b>Config warning</b>: topic mode enabled but sg (supergroup id) is not set.'
+    zh: '⚠️ <b>配置警告</b>: 话题模式已开启，但未配置超级群组 ID（sg）。请在 ENV_BOTS 的 sg 字段或 ENV_SUPERGROUP_ID 中填入（以 -100 开头），或发送 <code>/mode private</code> 切换私聊模式。',
+    en: '⚠️ <b>Config warning</b>: topic mode is on but supergroup id (sg) is not set. Fill sg in ENV_BOTS or ENV_SUPERGROUP_ID (starts with -100), or send <code>/mode private</code>.'
   },
   'verify.title': { zh: '🔒 <b>身份验证</b>', en: '🔒 <b>Verification</b>' },
   'verify.math_text': { zh: '问题：{q}\n\n(验证通过后请重新发送刚才的消息)', en: 'Question: {q}\n\n(Please resend your message after verification)' },
@@ -224,6 +224,14 @@ async function resolveBot(env, botId) {
     const fromEnv = parseBots(env)[botId];
     if (!fromEnv) return null;
     cfg = { bot_id: fromEnv.id, token: fromEnv.token, admin_uid: String(fromEnv.admin || ''), sg: String(fromEnv.sg || ''), topic: (fromEnv.topic === true || fromEnv.topic === 'true') ? 1 : 0, max: fromEnv.max, secret: fromEnv.secret || '' };
+  }
+  // default 机器人：缺失字段用独立 ENV_* 变量补齐（兼容 ENV_BOTS 里漏写 sg/topic 的情况）
+  if (botId === DEFAULT_BOT_ID) {
+    if (!cfg.admin_uid) cfg.admin_uid = env.ENV_ADMIN_UID || '';
+    if (!cfg.sg) cfg.sg = env.ENV_SUPERGROUP_ID || '';
+    if (!cfg.topic && env.ENV_ENABLE_TOPIC_GROUP === 'true') cfg.topic = 1;
+    if (!cfg.secret) cfg.secret = env.ENV_BOT_SECRET || '';
+    if (!cfg.max) cfg.max = env.ENV_MAX_MSG_PER_MIN || '';
   }
   const bot = {
     id: botId,
@@ -832,6 +840,19 @@ async function handleGuestMessage(bot, message) {
   let topicId = null;
   let forwardChatId = bot.adminUid;
 
+  // 话题模式开启但未配置 sg：警告管理员（每小时最多一次），并降级走私聊
+  if (bot.topicMode && !bot.supergroupId) {
+    const lastWarn = parseInt((await settingGet(bot, 'last_sg_warn')) || '0');
+    if (now - lastWarn > 3600) {
+      await settingSet(bot, 'last_sg_warn', String(now));
+      await sendMessage(bot, {
+        chat_id: bot.adminUid,
+        text: t(bot, 'mode.warn.nosg'),
+        parse_mode: 'HTML'
+      });
+    }
+  }
+
   if (bot.topicMode && bot.supergroupId) {
     forwardChatId = bot.supergroupId;
     const row = await bot.db.prepare('SELECT topic_id FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).first();
@@ -868,16 +889,41 @@ async function handleGuestMessage(bot, message) {
   };
   if (topicId) forwardBody.message_thread_id = parseInt(topicId);
 
-  const forwardReq = await copyMessage(bot, forwardBody);
+  let forwardReq = await copyMessage(bot, forwardBody);
+
+  // 话题模式下转发失败且带话题映射：话题可能已被手动删除 -> 清映射、重建话题、重试一次
+  if (!forwardReq.ok && bot.topicMode && bot.supergroupId && topicId) {
+    await bot.db.prepare('DELETE FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).run();
+    let title = `${message.chat.first_name || ''} ${message.chat.last_name || ''}`.trim();
+    if (message.chat.username) title += ` (@${message.chat.username})`;
+    if (!title) title = `User ${chatId}`;
+    if (title.length > 128) title = title.substring(0, 125) + '...';
+    const topicRes = await createForumTopic(bot, bot.supergroupId, title);
+    if (topicRes.ok) {
+      topicId = String(topicRes.result.message_thread_id);
+      await bot.db.prepare('INSERT OR REPLACE INTO chat_topic_mappings (bot_id, chat_id, topic_id) VALUES (?, ?, ?)')
+        .bind(bot.id, String(chatId), topicId).run();
+      forwardBody.message_thread_id = parseInt(topicId);
+      forwardReq = await copyMessage(bot, forwardBody);
+      // 新话题：重置信息卡标记，稍后重新发置顶卡
+      await setUserState(bot, chatId, { first_card_sent: 0 });
+    }
+  }
+
   if (forwardReq.ok) {
     const adminMsgId = String(forwardReq.result.message_id);
     await bot.db.prepare('INSERT OR REPLACE INTO message_mappings (bot_id, admin_message_id, guest_chat_id, created_at) VALUES (?, ?, ?, ?)')
       .bind(bot.id, adminMsgId, String(chatId), now).run();
     await settingSet(bot, 'last_guest', String(chatId));
 
-    if (!bot.topicMode && !topicId && !state.first_card_sent) {
-      // 私聊模式首次消息 -> 管理员私聊置顶信息卡
-      await sendFirstCard(bot, { chatId, message, topicMode: false });
+    if (!state.first_card_sent) {
+      if (bot.topicMode && topicId) {
+        // 话题模式：首次接入或话题重建后 -> 话题内置顶信息卡
+        await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
+      } else if (!bot.topicMode && !topicId) {
+        // 私聊模式首次消息 -> 管理员私聊置顶信息卡
+        await sendFirstCard(bot, { chatId, message, topicMode: false });
+      }
     }
   } else {
     console.error('Forward/Copy message failed:', JSON.stringify(forwardReq));
