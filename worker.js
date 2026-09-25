@@ -1,8 +1,9 @@
 // TG Chat Bot - Cloudflare Worker (D1 存储版, ES module 格式)
-// 数据持久化在 D1 (绑定名: DB)，首次请求自动建表/迁移，无需手动操作。
+// 数据持久化在 D1 (绑定名: D1)，首次请求自动建表/迁移，无需手动操作。
 //
 // 机器人配置：
-//   - 单机器人（默认）：设置 ENV_BOT_TOKEN / ENV_ADMIN_UID 等独立变量，id 为 "default"。
+//   - 单机器人（默认）：设置 BOT_TOKEN / ADMIN_UID / SUPERGROUP_ID / TOPIC_MODE /
+//     WEBHOOK_SECRET / MAX_MSG_PER_MIN，id 为 "default"。
 //   - 多机器人：一律通过管理面板 /bot add 指令存入 D1（免 Cloudflare 操作），webhook 路径 /endpoint/{id}。
 //     每个机器人需单独访问 /registerWebhook/{id} 注册。
 
@@ -41,8 +42,8 @@ const STRINGS = {
   'mode.topic': { zh: '话题群组模式', en: 'Topic Group' },
   'mode.private': { zh: '私聊模式', en: 'Private Chat' },
   'mode.warn.nosg': {
-    zh: '⚠️ <b>配置警告</b>: 话题模式已开启，但未配置超级群组 ID（sg）。请在面板用 <code>/bot set default sg -100xxx</code> 或设置 ENV_SUPERGROUP_ID，或发送 <code>/mode private</code> 切换私聊模式。',
-    en: '⚠️ <b>Config warning</b>: topic mode is on but supergroup id (sg) is not set. Use <code>/bot set default sg -100xxx</code> in the panel or set ENV_SUPERGROUP_ID, or send <code>/mode private</code>.'
+    zh: '⚠️ <b>配置警告</b>: 话题模式已开启，但未配置超级群组 ID（sg）。请在面板用 <code>/bot set default sg -100xxx</code> 或设置 SUPERGROUP_ID，或发送 <code>/mode private</code> 切换私聊模式。',
+    en: '⚠️ <b>Config warning</b>: topic mode is on but supergroup id (sg) is not set. Use <code>/bot set default sg -100xxx</code> in the panel or set SUPERGROUP_ID, or send <code>/mode private</code>.'
   },
   'verify.title': { zh: '🔒 <b>身份验证</b>', en: '🔒 <b>Verification</b>' },
   'verify.math_text': { zh: '问题：{q}\n\n(验证通过后您的消息将自动发送)', en: 'Question: {q}\n\n(Your message will be sent automatically after verification)' },
@@ -132,8 +133,8 @@ const STRINGS = {
   'lang.usage': { zh: '用法: <code>/lang zh</code> 或 <code>/lang en</code>', en: 'Usage: <code>/lang zh</code> or <code>/lang en</code>' },
   'lang.invalid': { zh: '⚠️ 无效参数，仅支持 zh / en。', en: '⚠️ Invalid argument. Only zh / en supported.' },
   'menu.admin': {
-    zh: '🛠 <b>管理面板</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 关键词 {kw} | 🌐 {lang}\n\n点击下方按钮直接执行；输入 <code>/</code> 可唤起命令菜单；<code>/help</code> 查看全部指令说明。',
-    en: '🛠 <b>Admin Panel</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 Keywords {kw} | 🌐 {lang}\n\nTap buttons below to execute; type <code>/</code> for the command menu; <code>/help</code> for the full list.'
+    zh: '🛠 <b>管理面板</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 关键词 {kw} | 🌐 {lang}\n🤖 Bot: <code>{botId}</code> | SG: <code>{sg}</code>\n\n点击下方按钮直接执行；输入 <code>/</code> 可唤起命令菜单；<code>/help</code> 查看全部指令说明。',
+    en: '🛠 <b>Admin Panel</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 Keywords {kw} | 🌐 {lang}\n🤖 Bot: <code>{botId}</code> | SG: <code>{sg}</code>\n\nTap buttons below to execute; type <code>/</code> for the command menu; <code>/help</code> for the full list.'
   },
   'help.text': {
     zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|custom 问题|答案|off|show</code> 验证方式\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
@@ -158,18 +159,14 @@ const STRINGS = {
   'bot.notfound': { zh: '⚠️ 未找到机器人 <code>{id}</code>。', en: '⚠️ Bot <code>{id}</code> not found.' },
   'bot.set.usage': { zh: '用法: <code>/bot set id token|admin|sg|max 值</code>', en: 'Usage: <code>/bot set id token|admin|sg|max value</code>' },
   'bot.set.ok': { zh: '✅ 已更新机器人 <code>{id}</code> 的 <code>{f}</code>。如改 token/admin 请重新注册 webhook。', en: '✅ Updated <code>{f}</code> for bot <code>{id}</code>. Re-register webhook if token/admin changed.' },
-  'topic.reply_hint': {
-    zh: '⚠️ 该话题尚未绑定用户或映射异常。请先在本话题里回复一条“来自该用户的转发消息”发送任意内容，系统会自动完成绑定。',
-    en: '⚠️ This topic has no bound user. Reply to a forwarded message from that user to auto-bind.'
-  },
   'map.notfound': { zh: '⚠️ 无法找到该消息的原始发送者 (可能已被清除)', en: '⚠️ Original sender not found for this message (mapping cleared?)' },
   'topic.create_fail': {
     zh: '⚠️ <b>话题创建失败</b>\nUID: {uid}\nError: {err}\n\n{hint}',
     en: '⚠️ <b>Topic creation failed</b>\nUID: {uid}\nError: {err}\n\n{hint}'
   },
   'topic.hint.kicked': {
-    zh: '机器人不在该群组中（或群组 ID 已变更）。\n请确认 sg/ENV_SUPERGROUP_ID 指向当前群组的最新 ID（以 -100 开头），并将机器人重新拉入群设为管理员（需"管理话题"权限）。',
-    en: 'The bot is not in this group (or the group ID changed).\nVerify sg/ENV_SUPERGROUP_ID matches the current group id (starts with -100), and re-add the bot as admin with "Manage Topics" permission.'
+    zh: '机器人不在该群组中（或群组 ID 已变更）。\n请确认 sg/SUPERGROUP_ID 指向当前群组的最新 ID（以 -100 开头），并将机器人重新拉入群设为管理员（需"管理话题"权限）。',
+    en: 'The bot is not in this group (or the group ID changed).\nVerify sg/SUPERGROUP_ID matches the current group id (starts with -100), and re-add the bot as admin with "Manage Topics" permission.'
   },
   'topic.hint.perm': {
     zh: '请检查机器人是否为群组管理员，且拥有"管理话题"权限。',
@@ -198,15 +195,15 @@ function t(bot, key, vars = {}) {
 function parseBots(env) {
   // 仅保留 default 机器人的旧版独立变量兼容；多机器人一律通过面板 /bot 存入 D1
   const bots = {};
-  if (env.ENV_BOT_TOKEN) {
+  if (env.BOT_TOKEN) {
     bots[DEFAULT_BOT_ID] = {
       id: DEFAULT_BOT_ID,
-      token: env.ENV_BOT_TOKEN,
-      admin: env.ENV_ADMIN_UID,
-      sg: env.ENV_SUPERGROUP_ID,
-      topic: env.ENV_ENABLE_TOPIC_GROUP === 'true',
-      secret: env.ENV_BOT_SECRET,
-      max: env.ENV_MAX_MSG_PER_MIN
+      token: env.BOT_TOKEN,
+      admin: env.ADMIN_UID,
+      sg: env.SUPERGROUP_ID,
+      topic: env.TOPIC_MODE === 'true',
+      secret: env.WEBHOOK_SECRET,
+      max: env.MAX_MSG_PER_MIN
     };
   }
   return bots;
@@ -223,25 +220,25 @@ const topicCreationLocks = new Map();
 // 构建带机器人上下文与已加载配置的 bot 对象。优先读 D1 bots 表（面板管理），回退到 default 独立变量。
 async function resolveBot(env, botId) {
   let cfg = null;
-  if (env.DB) {
-    cfg = await env.DB.prepare('SELECT * FROM bots WHERE bot_id = ?').bind(botId).first();
+  if (env.D1) {
+    cfg = await env.D1.prepare('SELECT * FROM bots WHERE bot_id = ?').bind(botId).first();
   }
   if (!cfg) {
     const fromEnv = parseBots(env)[botId];
     if (!fromEnv) return null;
     cfg = { bot_id: fromEnv.id, token: fromEnv.token, admin_uid: String(fromEnv.admin || ''), sg: String(fromEnv.sg || ''), topic: (fromEnv.topic === true || fromEnv.topic === 'true') ? 1 : 0, max: fromEnv.max, secret: fromEnv.secret || '' };
   }
-  // default 机器人：缺失字段用独立 ENV_* 变量补齐
+  // default 机器人：缺失字段用独立环境变量补齐
   if (botId === DEFAULT_BOT_ID) {
-    if (!cfg.admin_uid) cfg.admin_uid = env.ENV_ADMIN_UID || '';
-    if (!cfg.sg) cfg.sg = env.ENV_SUPERGROUP_ID || '';
-    if (!cfg.topic && env.ENV_ENABLE_TOPIC_GROUP === 'true') cfg.topic = 1;
-    if (!cfg.secret) cfg.secret = env.ENV_BOT_SECRET || '';
-    if (!cfg.max) cfg.max = env.ENV_MAX_MSG_PER_MIN || '';
+    if (!cfg.admin_uid) cfg.admin_uid = env.ADMIN_UID || '';
+    if (!cfg.sg) cfg.sg = env.SUPERGROUP_ID || '';
+    if (!cfg.topic && env.TOPIC_MODE === 'true') cfg.topic = 1;
+    if (!cfg.secret) cfg.secret = env.WEBHOOK_SECRET || '';
+    if (!cfg.max) cfg.max = env.MAX_MSG_PER_MIN || '';
   }
   const bot = {
     id: botId,
-    db: env.DB,
+    db: env.D1,
     env: env,
     token: cfg.token,
     adminUid: String(cfg.admin_uid || ''),
@@ -257,7 +254,7 @@ async function resolveBot(env, botId) {
   };
   // 一次批量查询加载全部运行时配置（减少 D1 往返）
   const keys = ['config:lang', 'config:security_level', 'config:verify_mode', 'config:enable_topic_group', 'config:math_ops', 'config:math_min', 'config:math_max', 'config:math_count'];
-  const res = await env.DB.prepare(`SELECT key, value FROM settings WHERE bot_id = ? AND key IN (${keys.map(() => '?').join(',')})`)
+  const res = await env.D1.prepare(`SELECT key, value FROM settings WHERE bot_id = ? AND key IN (${keys.map(() => '?').join(',')})`)
     .bind(botId, ...keys).all();
   const m = {};
   for (const r of res.results) m[r.key] = r.value;
@@ -569,10 +566,18 @@ const BOT_COMMANDS = [
 
 export default {
   async fetch(request, env, ctx) {
-    // 先确保表结构就绪（建表/旧表迁移），否则 registerWebhook 读 settings 会因缺表/缺列抛异常
-    if (env.DB) {
-      await ensureTables(env.DB);
+    // 配置自检：缺少 D1 绑定或 Bot Token 时给出明确提示，而不是抛 1101
+    if (!env.D1) {
+      return new Response('Config error: D1 binding "D1" is missing. Add it in Workers settings -> Bindings.', { status: 500 });
     }
+    if (!env.BOT_TOKEN) {
+      const hasBots = await env.D1.prepare('SELECT COUNT(*) AS n FROM bots').first().catch(() => null);
+      if (!hasBots || !hasBots.n) {
+        return new Response('Config error: BOT_TOKEN is missing. Set it in Workers settings -> Variables.', { status: 500 });
+      }
+    }
+    // 先确保表结构就绪（建表/旧表迁移），否则 registerWebhook 读 settings 会因缺表/缺列抛异常
+    await ensureTables(env.D1);
     const url = new URL(request.url);
     WORKER_ORIGIN = `${url.protocol}//${url.hostname}`;
     const p = url.pathname;
@@ -603,7 +608,7 @@ export default {
 };
 
 async function handleScheduled(env, event) {
-  const db = env.DB;
+  const db = env.D1;
   await ensureTables(db);
   const now = Math.floor(Date.now() / 1000);
   await db.prepare('DELETE FROM message_hashes WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now).run();
@@ -735,11 +740,8 @@ async function handleAdminMessage(bot, message) {
       return copyMessage(bot, { chat_id: userId, from_chat_id: message.chat.id, message_id: message.message_id });
     }
 
-    return sendMessage(bot, {
-      chat_id: message.chat.id,
-      text: t(bot, 'topic.reply_hint'),
-      message_thread_id: topicId
-    });
+    // 未绑定话题：静默忽略（不转发、不提示）
+    return;
   } else {
     // 私聊模式：回复转发的消息
     if (message.reply_to_message) {
@@ -1513,7 +1515,8 @@ async function panelText(bot) {
   const defaultSet = new Set(DEFAULT_KEYWORDS);
   const defaultCount = words.filter(w => defaultSet.has(w)).length;
   const kwText = bot.lang === 'zh' ? `${words.length}(默认${defaultCount})` : `${words.length}(${defaultCount} def)`;
-  return t(bot, 'menu.admin', { mode: modeText, sec: secText, verify: verifyText, lang: langText, kw: kwText });
+  const sgText = bot.supergroupId || (bot.topicMode ? (bot.lang === 'zh' ? '未配置!' : 'NOT SET!') : '-');
+  return t(bot, 'menu.admin', { mode: modeText, sec: secText, verify: verifyText, lang: langText, kw: kwText, botId: bot.id, sg: sgText });
 }
 
 // 渲染指定分类面板（编辑原消息，不刷屏）
@@ -1586,7 +1589,7 @@ async function autoRegisterWebhook(bot) {
   const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: webhookUrl, secret_token: secret }))).json();
   // 命令菜单仅注册到私聊（scope 限定），不影响群组；原作者版本无此调用，群组侧行为越少越好
   await requestTelegram(bot, 'setMyCommands', makeReqBody({
-    scope: { type: 'bot_command_scope_all_private_chats' },
+    scope: { type: 'all_private_chats' },
     commands: BOT_COMMANDS
   }));
   return r;
@@ -1634,7 +1637,7 @@ async function handleBotCommand(bot, message) {
     await bot.db.prepare('INSERT INTO bots (bot_id, token, admin_uid, sg, topic, max, secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind(id, token, String(admin), sg || '', topic, max, secret, Math.floor(Date.now() / 1000)).run();
     // 验证 token 有效性并自动注册 webhook
-    const newBot = await resolveBot({ DB: bot.db }, id);
+    const newBot = await resolveBot({ D1: bot.db }, id);
     let resultText;
     if (!newBot) {
       resultText = t(bot, 'bot.add.fail', { err: 'resolve error' });

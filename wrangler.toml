@@ -1,29 +1,25 @@
+# TG Chat Bot - Cloudflare Workers 配置
+# 入口：worker.js（D1 存储版）
 name = "tg-chat-bot"
 main = "worker.js"
 compatibility_date = "2023-10-30"
 
-# D1 database binding (replaces the old KV namespace).
-# Create it with: wrangler d1 create mirrotalk
-# then paste the returned database_id below. Tables are created automatically
-# on first request (no manual migration needed).
+# D1 数据库绑定（binding 名必须是 D1，代码按此名读取）
+# 创建：wrangler d1 create tgchatbot，把返回的 database_id 填到下面
+# 表结构在首次请求时自动创建，无需手动迁移
 [[d1_databases]]
-binding = "DB"
-database_name = "mirrotalk"
+binding = "D1"
+database_name = "tgchatbot"
 database_id = "YOUR_D1_DATABASE_ID"
 
-# Daily cleanup of expired dedupe hashes (UTC).
+# 每日清理过期去重哈希（UTC）
 [triggers]
 crons = ["0 0 * * *"]
 
 [vars]
-# --- Single-bot config: treated as bot id "default", webhook path /endpoint ---
-ENV_BOT_TOKEN = ""
-ENV_BOT_SECRET = ""
-ENV_ADMIN_UID = ""
-ENV_ENABLE_TOPIC_GROUP = "false"
-ENV_SUPERGROUP_ID = ""
-ENV_MAX_MSG_PER_MIN = 40
-
-# --- Multi-bot: managed entirely from the admin panel via /bot commands (stored in D1) ---
-# No Cloudflare config needed. Add a bot with:  /bot add <id> <token> <admin_uid> [sg] [topic] [max]
-# Then register its webhook:  https://<worker-domain>/registerWebhook/{id}
+BOT_TOKEN = ""          # Telegram Bot Token（建议部署时设为 Secret）
+ADMIN_UID = ""          # 管理员 Telegram User ID
+SUPERGROUP_ID = ""      # 话题模式群组 ID（以 -100 开头），私聊模式留空
+TOPIC_MODE = "false"    # true=话题群组模式，false=私聊模式
+WEBHOOK_SECRET = ""     # 留空则自动生成并存 D1
+MAX_MSG_PER_MIN = "40"  # 频率限制（条/分钟），超限触发重新验证
