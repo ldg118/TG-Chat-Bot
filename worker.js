@@ -13,6 +13,8 @@ const DEFAULT_BOT_ID = 'default';
 // --- 常量配置 ---
 const VERIFY_TTL_SECONDS = 3600; // 验证通过后 1 小时内免重复验证
 const CODE_TTL_SECONDS = 300;    // 验证码/题目有效期 5 分钟
+const MAX_VERIFY_ATTEMPTS = 5;   // 同一轮验证允许答错的次数，超限需重新发消息触发
+const MAX_CUSTOM_ITEMS = 20;     // 自定义问答题库条数上限
 const DEDUPE_TTL_SECONDS = 120; // 去重哈希 2 分钟过期（仅防短时刷屏，正常复述/确认不受影响）
 const TOPIC_CREATE_COOLDOWN = 600; // 同一用户建话题失败后冷却 10 分钟（防群级限流）
 const DEFAULT_LANG = 'zh';
@@ -105,11 +107,11 @@ const STRINGS = {
   'security.name.2': { zh: '标准模式', en: 'Standard' },
   'security.name.3': { zh: '宽松模式', en: 'Relaxed' },
   'verify.usage': {
-    zh: '用法:\n<code>/verify math</code> 动态算术验证\n<code>/verify custom 问题 | 答案</code> 自定义问答\n<code>/verify off</code> 关闭验证\n<code>/verify show</code> 查看当前配置',
-    en: 'Usage:\n<code>/verify math</code> dynamic math\n<code>/verify custom &lt;question&gt; | &lt;answer&gt;</code> custom Q&A\n<code>/verify off</code> disable\n<code>/verify show</code> show config'
+    zh: '用法:\n<code>/verify math</code> 动态算术验证\n<code>/verify custom 问题 | 答案</code> 设为唯一自定义题\n<code>/verify add 问题 | 答案</code> 追加自定义题\n<code>/verify list</code> 查看题库\n<code>/verify del 编号</code> 删除某题\n<code>/verify clear</code> 清空题库\n<code>/verify off</code> 关闭验证\n<code>/verify show</code> 查看当前配置',
+    en: 'Usage:\n<code>/verify math</code> dynamic math\n<code>/verify custom &lt;q&gt; | &lt;a&gt;</code> set one custom question\n<code>/verify add &lt;q&gt; | &lt;a&gt;</code> add a custom question\n<code>/verify list</code> list questions\n<code>/verify del &lt;n&gt;</code> delete one\n<code>/verify clear</code> clear all\n<code>/verify off</code> disable\n<code>/verify show</code> show config'
   },
   'verify.set.math': { zh: '✅ 验证方式已切换为：<b>动态算术</b>', en: '✅ Verification mode: <b>dynamic math</b>' },
-  'verify.set.custom': { zh: '✅ 验证方式已切换为：<b>自定义问答</b>\n问题: {q}', en: '✅ Verification mode: <b>custom Q&A</b>\nQuestion: {q}' },
+  'verify.set.custom': { zh: '✅ 验证方式已切换为：<b>自定义问答</b>\n题库已设为 1 题: {q}', en: '✅ Verification mode: <b>custom Q&A</b>\nQuestion bank set to 1 item: {q}' },
   'verify.set.off': { zh: '✅ 已关闭验证（所有用户免验证）。', en: '✅ Verification disabled (all users pass).' },
   'verify.show': {
     zh: '🛡 <b>验证配置</b>\n模式: {mode}\n{detail}\n有效期: 1 小时\n频率限制: 超过 {limit} 条/分钟 触发重新验证',
@@ -118,6 +120,18 @@ const STRINGS = {
   'verify.show.mode.math': { zh: '动态算术', en: 'Dynamic math' },
   'verify.show.mode.custom': { zh: '自定义问答', en: 'Custom Q&A' },
   'verify.show.mode.off': { zh: '已关闭', en: 'Disabled' },
+  'verify.show.custom_detail': { zh: '题库: {n} 题（验证时随机抽取）', en: 'Question bank: {n} item(s), picked at random' },
+  'verify.list.title': { zh: '📚 <b>自定义问答题库</b>（{n}/{max} 题，答案仅存服务端不回显）', en: '📚 <b>Custom question bank</b> ({n}/{max}, answers stay server-side)' },
+  'verify.list.item': { zh: '\n<b>{i}.</b> {q}', en: '\n<b>{i}.</b> {q}' },
+  'verify.list.empty': { zh: '📚 题库为空，用 <code>/verify add 问题 | 答案</code> 添加。', en: '📚 The question bank is empty. Add one with <code>/verify add &lt;q&gt; | &lt;a&gt;</code>.' },
+  'verify.add.done': { zh: '✅ 已添加第 {i} 题（共 {n} 题）: {q}', en: '✅ Added question #{i} ({n} total): {q}' },
+  'verify.add.limit': { zh: '⚠️ 题库已达上限 {max} 题，请先 <code>/verify del 编号</code> 删除后再添加。', en: '⚠️ Question bank is full ({max}). Delete one with <code>/verify del &lt;n&gt;</code> first.' },
+  'verify.del.done': { zh: '🗑 已删除第 {i} 题（剩余 {n} 题）: {q}', en: '🗑 Deleted question #{i} ({n} left): {q}' },
+  'verify.del.invalid': { zh: '⚠️ 编号无效，题库共 {n} 题。', en: '⚠️ Invalid index. The bank has {n} item(s).' },
+  'verify.clear.done': { zh: '🗑 题库已清空。', en: '🗑 Question bank cleared.' },
+  'verify.need.pipe': { zh: '⚠️ 格式错误，需用 <code>|</code> 分隔问题与答案，例如：<code>/verify add 你最喜欢的颜色？ | 蓝色</code>', en: '⚠️ Wrong format. Separate question and answer with <code>|</code>, e.g. <code>/verify add Favourite colour? | Blue</code>' },
+  'verify.retry.new_question': { zh: '❌ 答案错误，已更换题目。', en: '❌ Wrong answer — question changed.' },
+  'verify.attempts.over': { zh: '❌ 答错次数过多，请重新发送一条消息获取新题目。', en: '❌ Too many wrong answers. Send a new message to get a fresh challenge.' },
   'math.usage': {
     zh: '用法:\n<code>/math ops +-*/</code> 运算类型（可组合）\n<code>/math range 1 20</code> 操作数范围\n<code>/math count 4</code> 选项按钮数(2-6)\n<code>/math show</code> 查看当前配置',
     en: 'Usage:\n<code>/math ops +-*/</code> operations (combinable)\n<code>/math range 1 20</code> operand range\n<code>/math count 4</code> option buttons (2-6)\n<code>/math show</code> show config'
@@ -137,8 +151,8 @@ const STRINGS = {
     en: '🛠 <b>Admin Panel</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 Keywords {kw} | 🌐 {lang}\n🤖 Bot: <code>{botId}</code> | SG: <code>{sg}</code>\n\nTap buttons below to execute; type <code>/</code> for the command menu; <code>/help</code> for the full list.'
   },
   'help.text': {
-    zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|custom 问题|答案|off|show</code> 验证方式\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
-    en: '📖 <b>Command Reference</b>\n\n<b>Users</b> (reply to their msg or send in their topic)\n<code>/info</code> | <code>/trust</code> | <code>/untrust</code>\n<code>/block</code> | <code>/unblock</code> | <code>/blacklist</code>\n<code>/clear</code> user mappings | <code>/clear all</code>\n\n<b>System</b>\n<code>/mode private|topic</code>\n<code>/security 1|2|3</code> strict|standard|relaxed\n<code>/verify math|custom q|a|off|show</code>\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code>\n<code>/keyword list|add w|del w|reset</code>\n<code>/lang zh|en</code>\n<code>/welcome text</code> (supports {uid})\n\n<b>Bots</b>\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code> | <code>/bot set id token|admin|sg|max value</code>\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg (skips blocked users)'
+    zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|off|show</code> 验证方式\n<code>/verify custom 问题|答案</code> 设为唯一题 | <code>/verify add 问题|答案</code> 追加\n<code>/verify list</code> 题库 | <code>/verify del 编号</code> 删除 | <code>/verify clear</code> 清空\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
+    en: '📖 <b>Command Reference</b>\n\n<b>Users</b> (reply to their msg or send in their topic)\n<code>/info</code> | <code>/trust</code> | <code>/untrust</code>\n<code>/block</code> | <code>/unblock</code> | <code>/blacklist</code>\n<code>/clear</code> user mappings | <code>/clear all</code>\n\n<b>System</b>\n<code>/mode private|topic</code>\n<code>/security 1|2|3</code> strict|standard|relaxed\n<code>/verify math|off|show</code>\n<code>/verify custom q|a</code> set one | <code>/verify add q|a</code> add\n<code>/verify list</code> | <code>/verify del n</code> | <code>/verify clear</code>\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code>\n<code>/keyword list|add w|del w|reset</code>\n<code>/lang zh|en</code>\n<code>/welcome text</code> (supports {uid})\n\n<b>Bots</b>\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code> | <code>/bot set id token|admin|sg|max value</code>\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg (skips blocked users)'
   },
   'bot.usage': {
     zh: '用法:\n<code>/bot list</code> 查看机器人\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加\n<code>/bot del id</code> 删除\n<code>/bot set id token|admin|sg|max 值</code> 修改',
@@ -518,6 +532,30 @@ function generateMathChallenge(math) {
   };
 }
 
+// 生成一道算术题的卡片（题目文本 + 选项按钮 + 正确项下标）。
+// 首次发卡与答错换题共用，保证两处逻辑一致。
+function buildMathCard(bot, chatId) {
+  const challenge = generateMathChallenge(bot.math);
+  const options = [
+    { text: challenge.correct_answer, isCorrect: true },
+    ...challenge.incorrect_answers.map(ans => ({ text: ans, isCorrect: false }))
+  ];
+  shuffleArray(options);
+  const buttons = options.map((opt, idx) => ({
+    text: opt.text,
+    callback_data: `verify:${chatId}:${idx}`
+  }));
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
+  }
+  return {
+    question: challenge.question,
+    correctIndex: options.findIndex(o => o.isCorrect),
+    rows
+  };
+}
+
 // ---------------- 工具函数 ----------------
 
 async function sha256(message) {
@@ -827,10 +865,23 @@ async function handleGuestMessage(bot, message) {
         return new Response('Ok');
       } else {
         const attempts = (state.pending_attempts || 0) + 1;
-        await setUserState(bot, chatId, { pending_attempts: attempts });
-        if (attempts >= 3) {
+        if (attempts >= MAX_VERIFY_ATTEMPTS) {
           await setUserState(bot, chatId, { pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0 });
-          return sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.wrong') + '\n' + t(bot, 'rate.limited') });
+          return sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.attempts.over') });
+        }
+        // 答错即换题：重新随机抽一题，原地替换旧卡
+        const pick = await pickCustomItem(bot);
+        if (pick) {
+          await setUserState(bot, chatId, {
+            pending_question: pick.q, pending_answer: pick.a,
+            pending_code_expiry: now + CODE_TTL_SECONDS, pending_attempts: attempts
+          });
+          await editVerifyCard(
+            bot, chatId, state.pending_msg_id,
+            `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.retry.new_question')}\n\n${t(bot, 'verify.custom_text', { q: escapeHtml(pick.q) })}`,
+            null
+          );
+          return new Response('Ok');
         }
         return sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.wrong') });
       }
@@ -1085,6 +1136,62 @@ async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }
 
 // ---------------- 验证逻辑 ----------------
 
+// ---------------- 自定义问答题库 ----------------
+
+// 题库存于 settings 的 config:custom_items（JSON 数组）。
+// 兼容旧的单题配置 config:custom_question / config:custom_answer，首次读取时自动迁移。
+async function getCustomItems(bot) {
+  const raw = await settingGet(bot, 'config:custom_items');
+  if (raw) {
+    try {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr.filter(it => it && it.q && it.a);
+    } catch (e) { /* 数据损坏则回落到旧配置 */ }
+  }
+  const q = await settingGet(bot, 'config:custom_question');
+  const a = await settingGet(bot, 'config:custom_answer');
+  if (q && a) {
+    const items = [{ q, a }];
+    await setCustomItems(bot, items);
+    return items;
+  }
+  return [];
+}
+
+async function setCustomItems(bot, items) {
+  await settingSet(bot, 'config:custom_items', JSON.stringify(items));
+}
+
+// 从题库随机抽一题；题库为空返回 null
+async function pickCustomItem(bot) {
+  const items = await getCustomItems(bot);
+  if (!items.length) return null;
+  return items[secureRandomInt(0, items.length)];
+}
+
+// 原地替换验证卡（文本 + 按钮）。消息已删除等失败时降级为发一张新卡。
+async function editVerifyCard(bot, chatId, msgId, text, rows) {
+  if (msgId) {
+    const res = await editMessageText(bot, {
+      chat_id: chatId,
+      message_id: msgId,
+      text,
+      parse_mode: 'HTML',
+      // rows 为空时显式清空按钮，避免失效卡片残留可点击的选项
+      reply_markup: rows ? { inline_keyboard: rows } : { inline_keyboard: [] }
+    });
+    if (res && res.ok) return res;
+  }
+  const res = await sendMessage(bot, {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    reply_markup: rows ? { inline_keyboard: rows } : undefined
+  });
+  if (res.ok) await setUserState(bot, chatId, { pending_msg_id: res.result.message_id });
+  return res;
+}
+
 async function sendVerificationChallenge(bot, chatId, pendingMsgId, stash = null) {
   const now = Math.floor(Date.now() / 1000);
 
@@ -1106,16 +1213,15 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId, stash = null
   }
 
   if (bot.verifyMode === 'custom') {
-    const q = await settingGet(bot, 'config:custom_question');
-    const a = await settingGet(bot, 'config:custom_answer');
-    if (q && a) {
+    const pick = await pickCustomItem(bot);
+    if (pick) {
       await setUserState(bot, chatId, {
-        pending_question: q, pending_answer: a,
+        pending_question: pick.q, pending_answer: pick.a,
         pending_code_expiry: now + CODE_TTL_SECONDS, pending_attempts: 0
       });
       const res = await sendMessage(bot, {
         chat_id: chatId,
-        text: `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.custom_text', { q })}`,
+        text: `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.custom_text', { q: escapeHtml(pick.q) })}`,
         parse_mode: 'HTML',
         reply_to_message_id: pendingMsgId
       });
@@ -1127,37 +1233,20 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId, stash = null
     await sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.custom_notset') });
   }
 
-  const challenge = generateMathChallenge(bot.math);
-  const options = [
-    { text: challenge.correct_answer, isCorrect: true },
-    ...challenge.incorrect_answers.map(ans => ({ text: ans, isCorrect: false }))
-  ];
-  shuffleArray(options);
-
-  const correctIndex = options.findIndex(o => o.isCorrect);
+  const card = buildMathCard(bot, chatId);
   await setUserState(bot, chatId, {
-    pending_answer: String(correctIndex),
-    pending_question: challenge.question,
+    pending_answer: String(card.correctIndex),
+    pending_question: card.question,
     pending_code_expiry: now + CODE_TTL_SECONDS,
     pending_attempts: 0
   });
 
-  const keyboard = options.map((opt, idx) => ({
-    text: opt.text,
-    callback_data: `verify:${chatId}:${idx}`
-  }));
-
-  const rows = [];
-  for (let i = 0; i < keyboard.length; i += 2) {
-    rows.push(keyboard.slice(i, i + 2));
-  }
-
   const res = await sendMessage(bot, {
     chat_id: chatId,
-    text: `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.math_text', { q: challenge.question })}`,
+    text: `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.math_text', { q: card.question })}`,
     parse_mode: 'HTML',
     reply_to_message_id: pendingMsgId,
-    reply_markup: { inline_keyboard: rows }
+    reply_markup: { inline_keyboard: card.rows }
   });
   if (res.ok) await setUserState(bot, chatId, { pending_msg_id: res.result.message_id });
   else await setUserState(bot, chatId, { pending_answer: null, pending_code_expiry: 0 });
@@ -1227,11 +1316,24 @@ async function handleCallback(bot, callbackQuery) {
     return answerCallbackQuery(bot, callbackQuery.id, '✅');
   } else {
     const attempts = (state.pending_attempts || 0) + 1;
-    await setUserState(bot, chatId, { pending_attempts: attempts });
-    if (attempts >= 3) {
+    if (attempts >= MAX_VERIFY_ATTEMPTS) {
       await setUserState(bot, chatId, { pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0 });
+      await editVerifyCard(bot, chatId, callbackQuery.message.message_id, t(bot, 'verify.attempts.over'), null);
       return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.wrong'), true);
     }
+    // 答错即换新题：原地替换卡片，题目与选项全部刷新
+    const card = buildMathCard(bot, chatId);
+    await setUserState(bot, chatId, {
+      pending_answer: String(card.correctIndex),
+      pending_question: card.question,
+      pending_code_expiry: now + CODE_TTL_SECONDS,
+      pending_attempts: attempts
+    });
+    await editVerifyCard(
+      bot, chatId, callbackQuery.message.message_id,
+      `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.retry.new_question')}\n\n${t(bot, 'verify.math_text', { q: card.question })}`,
+      card.rows
+    );
     return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.wrong'), true);
   }
 }
@@ -1424,48 +1526,83 @@ async function handleVerifyCommand(bot, message) {
   const text = message.text.trim();
   const parts = text.split(/\s+/);
   const sub = (parts[1] || '').toLowerCase();
+  const opts = { chat_id: message.chat.id, message_thread_id: message.message_thread_id, parse_mode: 'HTML' };
+  const reply = (txt) => sendMessage(bot, { ...opts, text: txt });
+  // 取指令名之后的正文
+  const restText = () => text.slice(parts[0].length + parts[1].length + 2).trim();
+  // 解析 "问题 | 答案"
+  const parsePair = () => {
+    const rest = restText();
+    const sep = rest.indexOf('|');
+    if (sep < 0) return null;
+    const q = rest.slice(0, sep).trim();
+    const a = rest.slice(sep + 1).trim();
+    return (q && a) ? { q, a } : null;
+  };
 
-  if (!sub) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'verify.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  if (!sub) return reply(t(bot, 'verify.usage'));
 
   if (sub === 'math') {
     await settingSet(bot, 'config:verify_mode', 'math');
     bot.verifyMode = 'math';
-    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'verify.set.math'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    return reply(t(bot, 'verify.set.math'));
   }
   if (sub === 'off') {
     await settingSet(bot, 'config:verify_mode', 'off');
     bot.verifyMode = 'off';
-    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'verify.set.off'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    return reply(t(bot, 'verify.set.off'));
   }
-  if (sub === 'custom') {
-    const rest = text.slice(parts[0].length + parts[1].length + 2);
-    const sep = rest.indexOf('|');
-    if (sep < 0) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'verify.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
-    const q = rest.slice(0, sep).trim();
-    const a = rest.slice(sep + 1).trim();
-    if (!q || !a) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'verify.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
-    await settingSet(bot, 'config:custom_question', q);
-    await settingSet(bot, 'config:custom_answer', a);
+  if (sub === 'custom' || sub === 'add') {
+    const pair = parsePair();
+    if (!pair) return reply(t(bot, 'verify.need.pipe'));
+    if (sub === 'custom') {
+      // 兼容旧用法：清空后设为唯一一题
+      await setCustomItems(bot, [pair]);
+      await settingSet(bot, 'config:verify_mode', 'custom');
+      bot.verifyMode = 'custom';
+      return reply(t(bot, 'verify.set.custom', { q: escapeHtml(pair.q) }));
+    }
+    const items = await getCustomItems(bot);
+    if (items.length >= MAX_CUSTOM_ITEMS) {
+      return reply(t(bot, 'verify.add.limit', { max: MAX_CUSTOM_ITEMS }));
+    }
+    items.push(pair);
+    await setCustomItems(bot, items);
     await settingSet(bot, 'config:verify_mode', 'custom');
     bot.verifyMode = 'custom';
-    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'verify.set.custom', { q: escapeHtml(q) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    return reply(t(bot, 'verify.add.done', { i: items.length, n: items.length, q: escapeHtml(pair.q) }));
+  }
+  if (sub === 'list') {
+    const items = await getCustomItems(bot);
+    if (!items.length) return reply(t(bot, 'verify.list.empty'));
+    const list = items.map((it, i) => t(bot, 'verify.list.item', { i: i + 1, q: escapeHtml(it.q) })).join('');
+    return reply(t(bot, 'verify.list.title', { n: items.length, max: MAX_CUSTOM_ITEMS }) + list);
+  }
+  if (sub === 'del') {
+    const items = await getCustomItems(bot);
+    const n = parseInt(parts[2], 10);
+    if (!Number.isInteger(n) || n < 1 || n > items.length) {
+      return reply(t(bot, 'verify.del.invalid', { n: items.length }));
+    }
+    const removed = items.splice(n - 1, 1)[0];
+    await setCustomItems(bot, items);
+    return reply(t(bot, 'verify.del.done', { i: n, n: items.length, q: escapeHtml(removed.q) }));
+  }
+  if (sub === 'clear') {
+    await setCustomItems(bot, []);
+    return reply(t(bot, 'verify.clear.done'));
   }
   if (sub === 'show') {
     let detail = '';
     if (bot.verifyMode === 'custom') {
-      const q = await settingGet(bot, 'config:custom_question');
-      detail = q ? `Q: ${escapeHtml(q)}` : '(未设置)';
+      const items = await getCustomItems(bot);
+      detail = t(bot, 'verify.show.custom_detail', { n: items.length });
     } else if (bot.verifyMode === 'math') {
       detail = t(bot, 'math.show', { ops: bot.math.ops, min: bot.math.min, max: bot.math.max, count: bot.math.count });
     }
-    return sendMessage(bot, {
-      chat_id: message.chat.id,
-      text: t(bot, 'verify.show', { mode: t(bot, 'verify.show.mode.' + bot.verifyMode), detail, limit: bot.maxPerMin }),
-      parse_mode: 'HTML',
-      message_thread_id: message.message_thread_id
-    });
+    return reply(t(bot, 'verify.show', { mode: t(bot, 'verify.show.mode.' + bot.verifyMode), detail, limit: bot.maxPerMin }));
   }
-  return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'verify.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  return reply(t(bot, 'verify.usage'));
 }
 
 async function handleMathCommand(bot, message) {
@@ -1574,6 +1711,7 @@ async function showMenuPanel(bot, chatId, threadId, panel, msgId = null) {
         [ { text: '🧭 私聊模式', callback_data: 'cmd:/mode private' }, { text: '🧭 话题模式', callback_data: 'cmd:/mode topic' } ],
         [ { text: '🔐 算术验证', callback_data: 'cmd:/verify math' }, { text: '🔐 关闭验证', callback_data: 'cmd:/verify off' }, { text: '🔐 验证配置', callback_data: 'cmd:/verify show' } ],
         [ { text: '🧮 题库配置', callback_data: 'cmd:/math show' } ],
+        [ { text: '❓ 自定义题库', callback_data: 'cmd:/verify list' } ],
         [ BACK_BTN ]
       ];
       break;

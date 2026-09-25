@@ -14,7 +14,7 @@ A Telegram message forwarding bot running on Cloudflare Workers, with anti-spam 
 - **Anti-Spam & Anti-Scam**:
   - **Keyword Filtering**: Silently drops messages containing blacklisted keywords (e.g., 'scam', 'USDT').
   - **Dynamic Math Verification**: Unverified users solve a random math problem (e.g., 3+5=?) — configurable operators, range, and option count.
-  - **Custom Q&A Verification**: Admin-defined question/answer; the answer is stored server-side only.
+  - **Custom Q&A Verification**: maintain a bank of 1–20 questions instead of a single one; a random question is picked each time, and answers stay server-side.
   - **Security Levels**: Strict (mute), Standard (no media), Relaxed (no verification).
   - **Deduplication**: A user's identical content is not forwarded twice within 2 minutes.
   - **Block/Trust**: Shadowban (`/block`) or permanently trust (`/trust`) users.
@@ -125,8 +125,9 @@ Use `/bot` commands inside the admin panel (`/admin`) — configs are stored in 
 1.  **Keyword Blacklist**: Messages hitting suspicious keywords are silently dropped. Chinese words match as substrings; ASCII words match on **word boundaries** (case-insensitive) so short words like `av` don't false-positive inside passwords or account names. 12 defaults, managed via `/keyword`.
 2.  **Verification** (pick one):
     - **Dynamic Math** (default): a randomly generated problem answered via option buttons; operators, range and option count are configurable.
-    - **Custom Q&A**: an admin-set question/answer; the answer is stored server-side only.
+    - **Custom Q&A**: an admin-maintained bank of 1–20 questions; the user answers with text and a random question is picked each time. Answers are stored server-side only.
     - **Off**: everyone is verified automatically.
+    - **Wrong answer rotates the question**: the card is refreshed in place with a brand-new question and options; 5 wrong answers in a row require sending a new message.
     - Once passed, re-verification is skipped for **1 hour**; exceeding `MAX_MSG_PER_MIN` msgs/min forces re-verification. Blocked messages during verification are **stashed** and auto-sent after passing.
 3.  **Security Levels** (apply to unverified users only):
     - **Strict (1)**: cannot send anything. **Standard (2)**: text only, no media (default). **Relaxed (3)**: no verification.
@@ -142,7 +143,9 @@ Send `/admin` for the visual panel (tap-to-run buttons):
 - **/blacklist** — view the blocked list.
 - **/broadcast** — reply to a message to broadcast to all (skips blocked).
 - **/security <1|2|3>** — set security level.
-- **/verify <math|off|show>** or **/verify custom question | answer** — switch verification.
+- **/verify <math|off|show>** — switch verification mode / show config.
+- **/verify custom q | a** — replace the bank with a single question; **/verify add q | a** appends one (max 20).
+- **/verify list** / **/verify del n** / **/verify clear** — list / delete / clear the custom bank (answers are never echoed).
 - **/math ops +-*/** / **/math range 1 9** / **/math count 4** / **/math show** — configure the math bank.
 - **/keyword list|add word|del word|reset** — manage keyword blacklist.
 - **/lang <zh|en>** — switch UI language.
