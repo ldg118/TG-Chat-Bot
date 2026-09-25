@@ -279,6 +279,7 @@ async function createTables(db) {
     pending_answer TEXT,
     pending_code_expiry INTEGER DEFAULT 0,
     pending_attempts INTEGER DEFAULT 0,
+    pending_msg_id INTEGER DEFAULT 0,
     first_card_sent INTEGER DEFAULT 0,
     PRIMARY KEY (bot_id, chat_id)
   )`).run();
@@ -349,8 +350,15 @@ async function doEnsureTables(db) {
   }
   await createTables(db);
   for (const name of toMigrate) {
-    await db.exec(`INSERT INTO ${name} SELECT 'default', * FROM _old_${name}`);
+    const oldCols = await db.prepare(`PRAGMA table_info(_old_${name})`).all();
+    const colList = oldCols.results.map(c => c.name).join(', ');
+    await db.exec(`INSERT INTO ${name} (bot_id, ${colList}) SELECT 'default', ${colList} FROM _old_${name}`);
     await db.exec(`DROP TABLE _old_${name}`);
+  }
+  // 为已存在的表补充后续新增的列
+  const usInfo = await db.prepare('PRAGMA table_info(user_states)').all();
+  if (usInfo.results.length && !usInfo.results.some(c => c.name === 'pending_msg_id')) {
+    await db.exec('ALTER TABLE user_states ADD COLUMN pending_msg_id INTEGER DEFAULT 0');
   }
 }
 
@@ -374,7 +382,7 @@ async function getUserState(bot, chatId) {
   const def = {
     bot_id: bot.id, chat_id: String(chatId), is_blocked: 0, is_trusted: 0, is_verified: 0, verified_expiry: 0,
     is_rate_limited: 0, message_count: 0, window_start: 0,
-    pending_question: null, pending_answer: null, pending_code_expiry: 0, pending_attempts: 0,
+    pending_question: null, pending_answer: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0,
     first_card_sent: 0
   };
   await bot.db.prepare(`INSERT INTO user_states (bot_id, chat_id, is_blocked, is_trusted, is_verified, verified_expiry,
@@ -742,7 +750,7 @@ async function handleGuestMessage(bot, message) {
       if (answerGiven === state.pending_answer.trim().toLowerCase()) {
         await setUserState(bot, chatId, {
           is_verified: 1, verified_expiry: now + VERIFY_TTL_SECONDS,
-          pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0,
+          pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0,
           is_rate_limited: 0, message_count: 0, window_start: 0
         });
         await sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.passed'), parse_mode: 'HTML' });
@@ -751,7 +759,7 @@ async function handleGuestMessage(bot, message) {
         const attempts = (state.pending_attempts || 0) + 1;
         await setUserState(bot, chatId, { pending_attempts: attempts });
         if (attempts >= 3) {
-          await setUserState(bot, chatId, { pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0 });
+          await setUserState(bot, chatId, { pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0 });
           return sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.wrong') + '\n' + t(bot, 'rate.limited') });
         }
         return sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.wrong') });
@@ -921,21 +929,34 @@ async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }
 // ---------------- 验证逻辑 ----------------
 
 async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
+  const now = Math.floor(Date.now() / 1000);
+  const state = await getUserState(bot, chatId);
+
+  // 已有未过期的验证卡 -> 不重复发送
+  if (state.pending_answer && state.pending_code_expiry > now) {
+    return new Response('Ok');
+  }
+  // 旧卡已过期 -> 删除失效的旧卡再发新卡
+  if (state.pending_msg_id) {
+    try { await deleteMessage(bot, chatId, state.pending_msg_id); } catch (e) { /* 已被删除 */ }
+  }
+
   if (bot.verifyMode === 'custom') {
     const q = await settingGet(bot, 'config:custom_question');
     const a = await settingGet(bot, 'config:custom_answer');
     if (q && a) {
-      const now = Math.floor(Date.now() / 1000);
       await setUserState(bot, chatId, {
         pending_question: q, pending_answer: a,
         pending_code_expiry: now + CODE_TTL_SECONDS, pending_attempts: 0
       });
-      return sendMessage(bot, {
+      const res = await sendMessage(bot, {
         chat_id: chatId,
         text: `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.custom_text', { q })}`,
         parse_mode: 'HTML',
         reply_to_message_id: pendingMsgId
       });
+      if (res.ok) await setUserState(bot, chatId, { pending_msg_id: res.result.message_id });
+      return res;
     }
     // 未配置自定义题目时降级为算术题
     await sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.custom_notset') });
@@ -949,7 +970,6 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
   shuffleArray(options);
 
   const correctIndex = options.findIndex(o => o.isCorrect);
-  const now = Math.floor(Date.now() / 1000);
   await setUserState(bot, chatId, {
     pending_answer: String(correctIndex),
     pending_question: challenge.question,
@@ -967,13 +987,15 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
     rows.push(keyboard.slice(i, i + 2));
   }
 
-  return sendMessage(bot, {
+  const res = await sendMessage(bot, {
     chat_id: chatId,
     text: `${t(bot, 'verify.title')}\n\n${t(bot, 'verify.math_text', { q: challenge.question })}`,
     parse_mode: 'HTML',
     reply_to_message_id: pendingMsgId,
     reply_markup: { inline_keyboard: rows }
   });
+  if (res.ok) await setUserState(bot, chatId, { pending_msg_id: res.result.message_id });
+  return res;
 }
 
 async function handleCallback(bot, callbackQuery) {
@@ -1026,7 +1048,7 @@ async function handleCallback(bot, callbackQuery) {
   if (answerIdx === correctIdx) {
     await setUserState(bot, chatId, {
       is_verified: 1, verified_expiry: now + VERIFY_TTL_SECONDS,
-      pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0,
+      pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0,
       is_rate_limited: 0, message_count: 0, window_start: 0
     });
     await requestTelegram(bot, 'editMessageText', makeReqBody({
@@ -1040,7 +1062,7 @@ async function handleCallback(bot, callbackQuery) {
     const attempts = (state.pending_attempts || 0) + 1;
     await setUserState(bot, chatId, { pending_attempts: attempts });
     if (attempts >= 3) {
-      await setUserState(bot, chatId, { pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0 });
+      await setUserState(bot, chatId, { pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0 });
       return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.wrong'), true);
     }
     return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.wrong'), true);
