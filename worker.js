@@ -34,8 +34,8 @@ const DEFAULT_KEYWORDS = [
 // --- 双语词条 ---
 const STRINGS = {
   'welcome.user': {
-    zh: '请友善沟通，禁止发送广告、诈骗及违规内容，违规将被屏蔽。\n\nYour UID: {uid}',
-    en: 'Please keep the conversation friendly. Advertising, scams and other prohibited content are not allowed and will result in a block.\n\nYour UID: {uid}'
+    zh: '请友善沟通，禁止发送广告、诈骗及违规内容，违规将被屏蔽。\n\nYour UID: <code>{uid}</code>',
+    en: 'Please keep the conversation friendly. Advertising, scams and other prohibited content are not allowed and will result in a block.\n\nYour UID: <code>{uid}</code>'
   },
   'welcome.admin': {
     zh: '<b>Admin Control Panel</b>\nUID: {uid}\nMode: {mode}\n{sgWarn}\n发送 /admin 或 /help 查看完整管理菜单。',
@@ -778,8 +778,9 @@ async function onMessage(bot, message) {
     } else {
       const customWelcome = await settingGet(bot, 'config:welcome');
       if (customWelcome) {
-        // 支持 {uid} 占位符
-        startMsg = escapeHtml(customWelcome).split('{uid}').join(String(message.chat.id));
+        // 支持 {uid} 占位符；注入的 UID 包成 <code> 以便用户点击复制，
+        // 自定义文案本身仍整体转义，避免 HTML 注入
+        startMsg = escapeHtml(customWelcome).split('{uid}').join(`<code>${message.chat.id}</code>`);
       } else {
         startMsg = t(bot, 'welcome.user', { uid: message.chat.id });
       }
@@ -1725,7 +1726,9 @@ async function handleWelcomeCommand(bot, message) {
   const content = text.replace(/^\/welcome\s*/, '').trim();
   if (!content) {
     const cur = (await settingGet(bot, 'config:welcome')) || t(bot, 'welcome.user', { uid: '{uid}' });
-    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'welcome.usage', { welcome: escapeHtml(cur) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    // 预览按模板原文显示，占位符保持 {uid}；剔除模板自带的 <code> 标签，避免看到原始标签
+    const shown = cur.replace(/<\/?code>/g, '');
+    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'welcome.usage', { welcome: escapeHtml(shown) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   }
   await settingSet(bot, 'config:welcome', content);
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'welcome.set'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
