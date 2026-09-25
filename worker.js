@@ -161,6 +161,7 @@ const STRINGS = {
   },
   'bot.list.title': { zh: '机器人列表', en: 'Bot list' },
   'bot.list.empty': { zh: '（D1 中暂无记录，当前仅环境变量配置的机器人）', en: '(no bots in D1; env-configured bots only)' },
+  'bot.list.env': { zh: '环境变量', en: 'ENV' },
   'bot.list.usage': { zh: '<i>添加: /bot add id token UID [sg] [topic] [max]</i>', en: '<i>Add: /bot add id token UID [sg] [topic] [max]</i>' },
   'bot.add.usage': { zh: '用法: <code>/bot add id token 管理员UID [群组ID] [topic] [max]</code>', en: 'Usage: <code>/bot add id token ADMIN_UID [sg] [topic] [max]</code>' },
   'bot.add.exists': { zh: '⚠️ 机器人 <code>{id}</code> 已存在。', en: '⚠️ Bot <code>{id}</code> already exists.' },
@@ -241,6 +242,7 @@ async function resolveBot(env, botId) {
   const bot = {
     id: botId,
     db: env.DB,
+    env: env,
     token: cfg.token,
     adminUid: String(cfg.admin_uid || ''),
     supergroupId: String(cfg.sg || ''),
@@ -253,17 +255,21 @@ async function resolveBot(env, botId) {
     topicMode: false,
     math: { ops: '+-*/', min: 1, max: 9, count: 4 }
   };
-  bot.lang = (await settingGet(bot, 'config:lang')) || DEFAULT_LANG;
-  const sec = await settingGet(bot, 'config:security_level');
-  bot.security = sec === null ? DEFAULT_SECURITY_LEVEL : parseInt(sec);
-  bot.verifyMode = (await settingGet(bot, 'config:verify_mode')) || 'math';
-  const tm = await settingGet(bot, 'config:enable_topic_group');
-  bot.topicMode = tm === null ? bot.defaultTopicMode : (tm === 'true');
+  // 一次批量查询加载全部运行时配置（减少 D1 往返）
+  const keys = ['config:lang', 'config:security_level', 'config:verify_mode', 'config:enable_topic_group', 'config:math_ops', 'config:math_min', 'config:math_max', 'config:math_count'];
+  const res = await env.DB.prepare(`SELECT key, value FROM settings WHERE bot_id = ? AND key IN (${keys.map(() => '?').join(',')})`)
+    .bind(botId, ...keys).all();
+  const m = {};
+  for (const r of res.results) m[r.key] = r.value;
+  bot.lang = m['config:lang'] || DEFAULT_LANG;
+  bot.security = m['config:security_level'] === undefined || m['config:security_level'] === null ? DEFAULT_SECURITY_LEVEL : parseInt(m['config:security_level']);
+  bot.verifyMode = m['config:verify_mode'] || 'math';
+  bot.topicMode = m['config:enable_topic_group'] === undefined || m['config:enable_topic_group'] === null ? bot.defaultTopicMode : (m['config:enable_topic_group'] === 'true');
   bot.math = {
-    ops: (await settingGet(bot, 'config:math_ops')) || '+-*/',
-    min: parseInt((await settingGet(bot, 'config:math_min')) || '1'),
-    max: parseInt((await settingGet(bot, 'config:math_max')) || '9'),
-    count: parseInt((await settingGet(bot, 'config:math_count')) || '4')
+    ops: m['config:math_ops'] || '+-*/',
+    min: parseInt(m['config:math_min'] || '1'),
+    max: parseInt(m['config:math_max'] || '9'),
+    count: parseInt(m['config:math_count'] || '4')
   };
   return bot;
 }
@@ -520,6 +526,7 @@ function answerCallbackQuery(bot, callback_query_id, text, show_alert = false) {
 function deleteMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'deleteMessage', makeReqBody({ chat_id, message_id })); }
 function pinMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'pinChatMessage', makeReqBody({ chat_id, message_id })); }
 function unpinMessage(bot, chat_id, message_id) { return requestTelegram(bot, 'unpinChatMessage', makeReqBody({ chat_id, message_id })); }
+function editMessageText(bot, msg = {}) { return requestTelegram(bot, 'editMessageText', makeReqBody(msg)); }
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -976,6 +983,16 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId) {
 async function handleCallback(bot, callbackQuery) {
   const data = callbackQuery.data;
 
+  // 子面板导航：menu:main|users|security|verify|keywords|bots
+  if (data.startsWith('menu:')) {
+    const fromAdmin = callbackQuery.from && callbackQuery.from.id && callbackQuery.from.id.toString() === bot.adminUid;
+    if (!fromAdmin) {
+      return answerCallbackQuery(bot, callbackQuery.id, '⛔ Admin only', true);
+    }
+    await answerCallbackQuery(bot, callbackQuery.id);
+    return showMenuPanel(bot, callbackQuery.message.chat.id, callbackQuery.message.message_thread_id, data.slice(5), callbackQuery.message.message_id);
+  }
+
   // 管理面板内联按钮：点击即执行指令（仅管理员）
   if (data.startsWith('cmd:')) {
     const fromAdmin = callbackQuery.from && callbackQuery.from.id && callbackQuery.from.id.toString() === bot.adminUid;
@@ -990,8 +1007,9 @@ async function handleCallback(bot, callbackQuery) {
       text: cmdText,
       allowLastGuest: true
     };
-    await dispatchAdminCommand(bot, cmdText, fakeMessage);
-    return answerCallbackQuery(bot, callbackQuery.id, '✅');
+    // 先响应按钮（停止客户端转圈），再执行指令
+    await answerCallbackQuery(bot, callbackQuery.id, '✅');
+    return dispatchAdminCommand(bot, cmdText, fakeMessage);
   }
 
   if (!data.startsWith('verify:')) return;
@@ -1347,64 +1365,81 @@ async function handleWelcomeCommand(bot, message) {
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'welcome.set'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
-async function handleAdminMenu(bot, message) {
+// ---------------- 分类管理面板 ----------------
+
+const BACK_BTN = { text: '⬅️ 返回', callback_data: 'menu:main' };
+
+async function panelText(bot) {
   const modeText = bot.topicMode ? t(bot, 'mode.topic') : t(bot, 'mode.private');
   const secText = `${t(bot, 'security.name.' + bot.security)} (${bot.security})`;
   const verifyText = t(bot, 'verify.show.mode.' + bot.verifyMode);
   const langText = bot.lang === 'zh' ? '中文' : 'English';
-
-  // 关键词概要：总数 + 默认数
   const words = await getKeywords(bot);
   const defaultSet = new Set(DEFAULT_KEYWORDS);
   const defaultCount = words.filter(w => defaultSet.has(w)).length;
   const kwText = bot.lang === 'zh' ? `${words.length}(默认${defaultCount})` : `${words.length}(${defaultCount} def)`;
+  return t(bot, 'menu.admin', { mode: modeText, sec: secText, verify: verifyText, lang: langText, kw: kwText });
+}
 
-  // 纯按钮面板：点击即执行（用户管理指令需回复目标消息，或作用于最近来消息的用户）
-  const inline_keyboard = [
-    [
-      { text: 'ℹ️ 信息', callback_data: 'cmd:/info' },
-      { text: '🌟 信任', callback_data: 'cmd:/trust' },
-      { text: '🚫 屏蔽', callback_data: 'cmd:/block' },
-      { text: '✅ 解屏', callback_data: 'cmd:/unblock' }
-    ],
-    [
-      { text: '📃 黑名单', callback_data: 'cmd:/blacklist' },
-      { text: '📃 关键词', callback_data: 'cmd:/keyword list' },
-      { text: '🗑 清除', callback_data: 'cmd:/clear' },
-      { text: '📢 广播', callback_data: 'cmd:/broadcast' }
-    ],
-    [
-      { text: '🧭 私聊模式', callback_data: 'cmd:/mode private' },
-      { text: '🧭 话题模式', callback_data: 'cmd:/mode topic' },
-      { text: '🔐 验证配置', callback_data: 'cmd:/verify show' },
-      { text: '🧮 题库配置', callback_data: 'cmd:/math show' }
-    ],
-    [
-      { text: '🛡 严格', callback_data: 'cmd:/security 1' },
-      { text: '🛡 标准', callback_data: 'cmd:/security 2' },
-      { text: '🛡 宽松', callback_data: 'cmd:/security 3' },
-      { text: '🔐 关闭验证', callback_data: 'cmd:/verify off' }
-    ],
-    [
-      { text: '💬 欢迎语', callback_data: 'cmd:/welcome' },
-      { text: '📣 接入须知', callback_data: 'cmd:/notice' },
-      { text: '🌐 中文', callback_data: 'cmd:/lang zh' },
-      { text: '🌐 EN', callback_data: 'cmd:/lang en' }
-    ],
-    [
-      { text: '🤖 机器人管理', callback_data: 'cmd:/bot list' },
-      { text: '📖 帮助', callback_data: 'cmd:/help' },
-      { text: '🔄 刷新', callback_data: 'cmd:/admin' }
-    ]
-  ];
-
-  return sendMessage(bot, {
-    chat_id: message.chat.id,
-    text: t(bot, 'menu.admin', { mode: modeText, sec: secText, verify: verifyText, lang: langText, kw: kwText }),
+// 渲染指定分类面板（编辑原消息，不刷屏）
+async function showMenuPanel(bot, chatId, threadId, panel, msgId = null) {
+  let keyboard;
+  switch (panel) {
+    case 'users':
+      keyboard = [
+        [ { text: 'ℹ️ 信息', callback_data: 'cmd:/info' }, { text: '🌟 信任', callback_data: 'cmd:/trust' }, { text: '↩️ 取消信任', callback_data: 'cmd:/untrust' } ],
+        [ { text: '🚫 屏蔽', callback_data: 'cmd:/block' }, { text: '✅ 解屏', callback_data: 'cmd:/unblock' } ],
+        [ { text: '📃 黑名单', callback_data: 'cmd:/blacklist' }, { text: '� 清除映射', callback_data: 'cmd:/clear' } ],
+        [ BACK_BTN ]
+      ];
+      break;
+    case 'security':
+      keyboard = [
+        [ { text: '� 严格', callback_data: 'cmd:/security 1' }, { text: '🛡 标准', callback_data: 'cmd:/security 2' }, { text: '� 宽松', callback_data: 'cmd:/security 3' } ],
+        [ { text: '🧭 私聊模式', callback_data: 'cmd:/mode private' }, { text: '🧭 话题模式', callback_data: 'cmd:/mode topic' } ],
+        [ { text: '🔐 算术验证', callback_data: 'cmd:/verify math' }, { text: '🔐 关闭验证', callback_data: 'cmd:/verify off' }, { text: '� 验证配置', callback_data: 'cmd:/verify show' } ],
+        [ { text: '🧮 题库配置', callback_data: 'cmd:/math show' } ],
+        [ BACK_BTN ]
+      ];
+      break;
+    case 'texts':
+      keyboard = [
+        [ { text: '� 关键词列表', callback_data: 'cmd:/keyword list' }, { text: '� 恢复默认词', callback_data: 'cmd:/keyword reset' } ],
+        [ { text: '💬 欢迎语', callback_data: 'cmd:/welcome' }, { text: '📣 接入须知', callback_data: 'cmd:/notice' } ],
+        [ { text: '🌐 中文', callback_data: 'cmd:/lang zh' }, { text: '🌐 English', callback_data: 'cmd:/lang en' } ],
+        [ BACK_BTN ]
+      ];
+      break;
+    case 'bots':
+      keyboard = [
+        [ { text: '📋 机器人列表', callback_data: 'cmd:/bot list' } ],
+        [ { text: '📖 添加方法说明', callback_data: 'cmd:/bot' } ],
+        [ BACK_BTN ]
+      ];
+      break;
+    default: // main
+      keyboard = [
+        [ { text: '� 用户管理', callback_data: 'menu:users' }, { text: '🛡 安全与模式', callback_data: 'menu:security' } ],
+        [ { text: '📝 文案与语言', callback_data: 'menu:texts' }, { text: '🤖 机器人管理', callback_data: 'menu:bots' } ],
+        [ { text: '📢 广播(回复消息)', callback_data: 'cmd:/broadcast' }, { text: '📖 全部指令', callback_data: 'cmd:/help' } ]
+      ];
+  }
+  const body = {
+    chat_id: chatId,
+    text: await panelText(bot),
     parse_mode: 'HTML',
-    message_thread_id: message.message_thread_id,
-    reply_markup: { inline_keyboard }
-  });
+    reply_markup: { inline_keyboard: keyboard }
+  };
+  if (msgId) {
+    body.message_id = msgId;
+    return editMessageText(bot, body);
+  }
+  if (threadId) body.message_thread_id = threadId;
+  return sendMessage(bot, body);
+}
+
+async function handleAdminMenu(bot, message) {
+  return showMenuPanel(bot, message.chat.id, message.message_thread_id, 'main');
 }
 
 // ---------------- 机器人管理（/bot） ----------------
@@ -1444,10 +1479,19 @@ async function handleBotCommand(bot, message) {
 
   if (sub === 'list') {
     const res = await bot.db.prepare('SELECT bot_id, admin_uid, sg, topic, max FROM bots ORDER BY bot_id').all();
+    const d1Ids = new Set(res.results.map(r => r.bot_id));
     let text = `🤖 <b>${t(bot, 'bot.list.title')}</b>\n`;
     const rows = [];
     for (const r of res.results) {
-      rows.push(`<code>${escapeHtml(r.bot_id)}</code> — ${r.topic ? t(bot, 'mode.topic') : t(bot, 'mode.private')}${r.sg ? ` | sg: <code>${escapeHtml(r.sg)}</code>` : ''}`);
+      rows.push(`<code>${escapeHtml(r.bot_id)}</code> [D1] — ${r.topic ? t(bot, 'mode.topic') : t(bot, 'mode.private')}${r.sg ? ` | sg: <code>${escapeHtml(r.sg)}</code>` : ''}`);
+    }
+    // 环境变量来源（D1 中不存在的才显示，同名时 D1 优先）
+    const envBots = parseBots(bot.env || {});
+    for (const id of Object.keys(envBots)) {
+      if (!d1Ids.has(id)) {
+        const b = envBots[id];
+        rows.push(`<code>${escapeHtml(id)}</code> [${t(bot, 'bot.list.env')}] — ${b.topic ? t(bot, 'mode.topic') : t(bot, 'mode.private')}${b.sg ? ` | sg: <code>${escapeHtml(String(b.sg))}</code>` : ''}`);
+      }
     }
     if (!rows.length) text += t(bot, 'bot.list.empty');
     else text += rows.join('\n');
