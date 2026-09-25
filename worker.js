@@ -34,8 +34,8 @@ const DEFAULT_KEYWORDS = [
 // --- 双语词条 ---
 const STRINGS = {
   'welcome.user': {
-    zh: '请直接发送信息给我，我会转发给技术。\n\nYour UID: {uid}',
-    en: 'Send me a message directly and I will forward it to the admin.\n\nYour UID: {uid}'
+    zh: '请友善沟通，禁止发送广告、诈骗及违规内容，违规将被屏蔽。\n\nYour UID: {uid}',
+    en: 'Please keep the conversation friendly. Advertising, scams and other prohibited content are not allowed and will result in a block.\n\nYour UID: {uid}'
   },
   'welcome.admin': {
     zh: '<b>Admin Control Panel</b>\nUID: {uid}\nMode: {mode}\n{sgWarn}\n发送 /admin 或 /help 查看完整管理菜单。',
@@ -1119,10 +1119,10 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
     if (!state.first_card_sent) {
       if (bot.topicMode && topicId) {
         // 话题模式：首次接入或话题重建后 -> 话题内信息卡
-        await sendFirstCard(bot, { chatId, message, topicMode: true, topicId, state });
+        await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
       } else if (!bot.topicMode && !topicId) {
         // 私聊模式首次消息 -> 管理员私聊信息卡
-        await sendFirstCard(bot, { chatId, message, topicMode: false, state });
+        await sendFirstCard(bot, { chatId, message, topicMode: false });
       }
     }
   } else {
@@ -1154,10 +1154,11 @@ async function deliverPendingForward(bot, chatId, state) {
 }
 
 // 首次信息卡：昵称/用户名/UserID/发起时间（不置顶，仅发送）
-// 调用方若已持有用户状态则传入，省一次 D1 读取
-async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null, state = null }) {
+// 注意：这里必须每次都重新读库判断 first_card_sent，不能复用调用方的状态快照。
+// 建话题流程会在 ensureTopicInner 里先发一次卡，调用方持有的旧快照仍是 0，复用会导致重复发卡。
+async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }) {
   try {
-    const s = state || await getUserState(bot, chatId);
+    const s = await getUserState(bot, chatId);
     if (s.first_card_sent) return;
 
     // 给管理员端发信息卡
