@@ -1,4 +1,4 @@
-// Telegram MirroTalk Bot - Cloudflare Worker (D1 存储版, ES module 格式)
+// TG Chat Bot - Cloudflare Worker (D1 存储版, ES module 格式)
 // 数据持久化在 D1 (绑定名: DB)，首次请求自动建表/迁移，无需手动操作。
 //
 // 机器人配置：
