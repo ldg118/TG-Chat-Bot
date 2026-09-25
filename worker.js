@@ -270,7 +270,7 @@ async function createTables(db) {
     topic_id TEXT NOT NULL,
     PRIMARY KEY (bot_id, chat_id)
   )`).run();
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_topic_user ON chat_topic_mappings(bot_id, topic_id)`).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_ctm_topic ON chat_topic_mappings(bot_id, topic_id)`).run();
   await db.prepare(`CREATE TABLE IF NOT EXISTS message_hashes (
     bot_id TEXT NOT NULL DEFAULT 'default',
     hash TEXT NOT NULL,
@@ -291,7 +291,17 @@ async function createTables(db) {
 }
 
 // 检测旧表结构（无 bot_id 列）并自动迁移，旧数据归入 default 机器人
+let tablesReady = false;
+let tablesPromise = null;
 async function ensureTables(db) {
+  if (tablesReady) return;
+  if (!tablesPromise) {
+    tablesPromise = doEnsureTables(db).then(() => { tablesReady = true; }).catch(e => { tablesPromise = null; throw e; });
+  }
+  return tablesPromise;
+}
+
+async function doEnsureTables(db) {
   const toMigrate = [];
   for (const name of TABLES) {
     const info = await db.prepare(`PRAGMA table_info(${name})`).all();
@@ -476,6 +486,10 @@ function escapeHtml(s) {
 
 export default {
   async fetch(request, env, ctx) {
+    // 先确保表结构就绪（建表/旧表迁移），否则 registerWebhook 读 settings 会因缺表/缺列抛异常
+    if (env.DB) {
+      await ensureTables(env.DB);
+    }
     const url = new URL(request.url);
     const p = url.pathname;
     let m;
