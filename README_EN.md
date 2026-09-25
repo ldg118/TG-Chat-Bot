@@ -43,14 +43,14 @@ A Telegram message forwarding bot running on Cloudflare Workers, with anti-spam 
 需要以下环境变量（可以在 `wrangler.toml` 中填写或在部署时配置）：
 
 - `ENV_BOT_TOKEN`: Your Telegram Bot Token (from @BotFather).
-- `ENV_BOT_SECRET`: (Optional) A random string for Webhook security. If left empty, the system will automatically generate a UUID and store it in KV.
+- `ENV_BOT_SECRET`: (Optional) A random string for Webhook security. If left empty, the system will automatically generate a UUID and store it in D1.
 - `ENV_ADMIN_UID`: Your Telegram User ID (from @userinfobot). Used for receiving admin notifications.
 - `ENV_SUPERGROUP_ID`: The ID of the Supergroup where the bot will create topics (starts with `-100`). Required only if `ENV_ENABLE_TOPIC_GROUP` is `true`.
 - `ENV_ENABLE_TOPIC_GROUP` (Optional): Set to `true` to enable Topic Group mode. Default is `false` (Private Chat mode).
-- `ENV_MAP_TTL_DAYS` (Optional): Message mapping expiration time in days. Default is 7 days.
+- `ENV_MAX_MSG_PER_MIN` (Optional): Rate limit threshold (messages/minute) that forces re-verification. Default is `40`.
 
-**KV Namespace**:
-You need to create a KV namespace named `MirroTalk` and bind it to the Worker.
+**D1 Database**:
+Create a D1 database (e.g. `mirrotalk`) and put its `database_id` in the `[[d1_databases]]` binding (`DB`) in `wrangler.toml`. Tables are created automatically on first request — no manual migration needed.
 
 ## Operating Modes
 
@@ -105,24 +105,31 @@ This bot includes a powerful anti-spam system designed to protect admins from sp
 Send `/admin` in the Supergroup to see the control panel:
 
 - **/info**: View user info in a topic.
-- **/trust**: Permanently trust a user (skip verification).
+- **/trust** / **/untrust**: Permanently trust a user (skip verification) / remove trust.
 - **/block**: Shadowban a user.
 - **/unblock**: Unban a user.
+- **/blacklist**: View the blocked users list.
 - **/broadcast**: Reply to a message to broadcast it to all users.
 - **/security <1|2|3>**: Set security level.
+- **/verify <math|off|show>** or **/verify custom <question> | <answer>**: Switch verification mode (dynamic math / custom Q&A / disabled).
+- **/math ops +-*/** / **/math range 1 9** / **/math count 4** / **/math show**: Configure the math question bank (operators, operand range, option buttons).
+- **/keyword list|add <word>|del <word>|reset**: Manage the keyword blacklist.
+- **/lang <zh|en>**: Switch UI language.
+- **/clear**: Clear message mappings for a user (reply to their message or send in their topic); `/clear all` wipes all mappings.
+- **/mode <private|topic>**: Switch operating mode.
 
-## Cloudflare Free Tier Limitations & Optimizations
+## Data Storage (D1)
 
-The Cloudflare Workers KV free tier has specific limits:
-1.  **Storage**: 1GB
-2.  **Write Operations**: 1,000 per day
+All data is persisted in Cloudflare D1; tables are created automatically on first request:
 
-This system is optimized to handle these limits:
-- **Auto-Expiration (TTL)**: All message mapping records automatically expire after 7 days (default). This ensures KV storage is never permanently filled. You can adjust this via the `ENV_MAP_TTL_DAYS` environment variable.
-- **Space Reclamation**: Unblocking (`/unblock`) and untrusting (`/untrust`) operations directly **delete** data from KV instead of marking it as invalid, freeing up space immediately.
-- **Write Conservation**: Deduplication and blacklist filtering prevent spam from triggering KV write operations, saving your daily write quota.
+- **user_states**: user status (blocked/trusted/verified/rate-limited/pending challenge), permanent. Verification is valid for **1 hour**; exceeding `ENV_MAX_MSG_PER_MIN` messages/minute forces re-verification.
+- **message_mappings**: message routing map, **kept permanently** (no more 7-day expiry) — you can reply to any historical forwarded message to reach the original user; delete manually via `/clear`.
+- **chat_topic_mappings**: user ↔ topic binding, permanent.
+- **message_hashes**: dedupe hashes, cleaned by a daily cron after 7 days (prevents false positives on common repeated phrases).
+- **keywords**: keyword blacklist, managed via `/keyword`.
+- **settings**: config (security level / verify mode / math params / language / pinned card IDs).
 
-**Note**: If your bot processes more than 1,000 valid interactions (forwards + replies) per day, we recommend upgrading to the Cloudflare Workers Paid Plan ($5/mo).
+The D1 free tier (100k writes/day, 5GB) far exceeds the old KV limits (1,000 writes/day, 1GB); no paid plan needed for typical use.
 
 ## Setup Instructions
 
@@ -131,5 +138,5 @@ This system is optimized to handle these limits:
     *   **Method A (Recommended)**: Before deployment, fill in a dummy UID (e.g., `123`) and deploy. Then send `/start` to your bot, and it will reply with your real UID.
     *   **Method B**: Get your user ID from a third-party bot like @username_to_id_bot.
 3.  **Deploy**: Click the "Deploy with Workers" button above.
-4.  **绑定 KV**：在 Cloudflare 控制台，进入你的 Worker -> Settings -> Variables -> KV Namespace Bindings。添加一个变量名为 `MirroTalk` 的绑定，并创建一个新的命名空间。
-5.  **设置 Webhook**：部署完成后，访问以下链接注册 Webhook：`https://你的-worker-子域名.workers.dev/registerWebhook`
+4.  **Bind D1**: Create a D1 database (console or `wrangler d1 create mirrotalk`), fill the `database_id` into `wrangler.toml`, and add a D1 binding named `DB` in your Worker settings. Tables are created automatically on first request.
+5.  **Set Webhook**: After deployment, visit `https://your-worker-subdomain.workers.dev/registerWebhook` to register the webhook.

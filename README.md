@@ -33,14 +33,14 @@
 需要以下环境变量（可以在 `wrangler.toml` 中填写或在部署时配置）：
 
 - `ENV_BOT_TOKEN`: 你的 Telegram 机器人 Token (从 @BotFather 获取)。
-- `ENV_BOT_SECRET`: (可选) 用于 Webhook 安全验证的随机字符串。如果留空，系统将自动生成 UUID 并保存在 KV 中。
+- `ENV_BOT_SECRET`: (可选) 用于 Webhook 安全验证的随机字符串。如果留空，系统将自动生成 UUID 并保存在 D1 中。
 - `ENV_ADMIN_UID`: 你的 Telegram 用户 ID (从 @userinfobot 获取)。用于接收通知。
 - `ENV_SUPERGROUP_ID`: 你的超级群组 ID (以 `-100` 开头)。仅在 `ENV_ENABLE_TOPIC_GROUP` 为 `true` 时需要。
 - `ENV_ENABLE_TOPIC_GROUP` (可选): 设置为 `true` 以开启话题群组模式。默认为 `false` (私聊模式)。
-- `ENV_MAP_TTL_DAYS` (可选): 消息映射过期时间（天）。默认为 7 天。
+- `ENV_MAX_MSG_PER_MIN` (可选): 频率限制阈值（条/分钟），超限触发重新验证。默认为 `40`。
 
-**KV 命名空间**：
-你需要创建一个名为 `MirroTalk` 的 KV 命名空间并将其绑定到 Worker。
+**D1 数据库**：
+你需要创建一个 D1 数据库（如 `mirrotalk`），并将其 ID 填入 `wrangler.toml` 的 `[[d1_databases]]` 绑定（binding 名为 `DB`）。表结构在首次请求时自动创建，无需手动迁移。
 
 ## 运行模式
 
@@ -95,12 +95,19 @@
 在超级群组中发送 `/admin` 查看控制面板：
 
 - **/info**：查看当前话题对应的用户信息。
-- **/trust**：永久信任当前用户（跳过验证）。
-- **/block**：屏蔽当前用户。
+- **/trust** / **/untrust**：永久信任当前用户（跳过验证）/ 取消信任。
+- **/block**：屏蔽当前用户（Shadowban）。
 - **/unblock**：解除屏蔽。
+- **/blacklist**：查看当前黑名单用户列表。
 - **/broadcast**：回复一条消息进行全员广播。
 - **/security <1|2|3>**：设置安全级别。
-   103→
+- **/verify <math|off|show>** 或 **/verify custom 问题 | 答案**：切换验证方式（动态算术 / 自定义问答 / 关闭）。
+- **/math ops +-*/** / **/math range 1 9** / **/math count 4** / **/math show**：配置算术题库（运算类型、操作数范围、选项按钮数）。
+- **/keyword list|add 词|del 词|reset**：管理关键词黑名单。
+- **/lang <zh|en>**：切换界面语言。
+- **/clear**：清除指定用户的消息映射（回复其消息或在其话题内发送）；`/clear all` 清空全部映射。
+- **/mode <private|topic>**：切换运行模式。
+
 ### 权限系统深入理解 (/trust vs /block vs /unblock)
 
 为了在安全与便利之间取得平衡，机器人设计了一套精细的权限控制逻辑：
@@ -117,23 +124,23 @@
 
 **优先级规则**：`trust` 具有最高优先级且与 `block` 状态互斥。执行 `/trust` 会自动覆盖并移除该用户的 `/block` 状态。
 
-## Cloudflare 免费版限制与应对
+## 数据存储说明 (D1)
 
-Cloudflare Workers KV 免费套餐有以下主要限制：
-1.  **存储空间**：1GB
-2.  **写入操作**：每天 1000 次
+本系统使用 Cloudflare D1 数据库存储全部数据，表结构在首次请求时自动创建：
 
-本系统已针对这些限制进行了深度优化：
-- **自动过期 (TTL)**：所有的消息映射记录都会在 7 天（默认）后自动删除。这确保了 KV 空间永远不会被无限占满。您可以通过 `ENV_MAP_TTL_DAYS` 环境变量调整此时间。
-- **空间回收**：解除屏蔽 (`/unblock`) 和移除信任 (`/untrust`) 操作会直接从 KV 中**删除**数据，而不是标记为无效，从而释放空间。
-- **写入节省**：通过消息去重和黑名单过滤，无效的垃圾消息不会触发 KV 写入操作，节省宝贵的每日写入额度。
+- **user_states**：用户状态（黑名单/信任/验证/频率限制/待答验证题），永久保存。验证通过后 **1 小时**内免重复验证；超过 `ENV_MAX_MSG_PER_MIN` 条/分钟触发重新验证。
+- **message_mappings**：消息路由映射，**永久保存**（不再 7 天过期），可随时回复任意历史转发消息找回原用户；通过 `/clear` 手动删除。
+- **chat_topic_mappings**：用户 ↔ 话题双向映射，永久保存。
+- **message_hashes**：去重哈希，7 天后由每日 Cron 自动清理（防止误伤正常重复用语）。
+- **keywords**：关键词黑名单，通过 `/keyword` 指令增删。
+- **settings**：配置项（安全级别/验证模式/题库参数/语言/置顶卡片 ID 等）。
 
-**注意**：如果您的机器人每天需要处理超过 1000 条有效交互（转发+回复），建议升级 Cloudflare Workers 付费套餐（$5/月）。
+D1 免费版额度（10 万行写/天、5GB）远超原 KV 方案（1000 次写/天、1GB），日常使用无需升级付费套餐。
 
 ## 安装指南
 
 1.  **获取 Token**：从 @BotFather 获取你的 Bot Token。
 2.  **获取 UID**：从 @username_to_id_bot 或类似机器人获取你的用户 ID。
 3.  **部署**：点击上方的 "Deploy with Workers" 按钮。
-4.  **绑定 KV**：在 Cloudflare 控制台，进入你的 Worker -> Settings -> Variables -> KV Namespace Bindings。添加一个变量名为 `MirroTalk` 的绑定，并创建一个新的命名空间。
+4.  **绑定 D1**：创建 D1 数据库（控制台或 `wrangler d1 create mirrotalk`），将 `database_id` 填入 `wrangler.toml`，并在 Worker 设置中添加 binding 名为 `DB` 的 D1 绑定。表结构首次请求时自动创建。
 5.  **设置 Webhook**：部署完成后，访问以下链接注册 Webhook：`https://你的-worker-子域名.workers.dev/registerWebhook`
