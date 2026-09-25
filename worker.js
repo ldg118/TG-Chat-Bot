@@ -16,6 +16,7 @@ const DEFAULT_BOT_ID = 'default';
 const VERIFY_TTL_SECONDS = 3600; // 验证通过后 1 小时内免重复验证
 const CODE_TTL_SECONDS = 300;    // 验证码/题目有效期 5 分钟
 const DEDUPE_TTL_SECONDS = 7 * 24 * 3600; // 去重哈希 7 天过期
+const TOPIC_CREATE_COOLDOWN = 600; // 同一用户建话题失败后冷却 10 分钟（防群级限流）
 const DEFAULT_LANG = 'zh';
 
 // 安全级别定义
@@ -883,7 +884,13 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
     const row = await bot.db.prepare('SELECT topic_id FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).first();
     topicId = row ? row.topic_id : null;
 
-    if (!topicId) {
+    // 创建话题冷却期内（群级限流保护）：降级转发到管理员私聊，不再刷 createForumTopic
+    const lastTry = parseInt((await settingGet(bot, `topic:last:${chatId}`)) || '0');
+    if (!topicId && now - lastTry < TOPIC_CREATE_COOLDOWN) {
+      forwardChatId = bot.adminUid;
+      topicId = null;
+    } else if (!topicId) {
+      await settingSet(bot, `topic:last:${chatId}`, String(now));
       let title = `${message.chat.first_name || ''} ${message.chat.last_name || ''}`.trim();
       if (message.chat.username) title += ` (@${message.chat.username})`;
       if (!title) title = `User ${chatId}`;
@@ -894,6 +901,7 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
         topicId = String(topicRes.result.message_thread_id);
         await bot.db.prepare('INSERT OR REPLACE INTO chat_topic_mappings (bot_id, chat_id, topic_id) VALUES (?, ?, ?)')
           .bind(bot.id, String(chatId), topicId).run();
+        await settingDel(bot, `topic:last:${chatId}`);
         await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
       } else {
         console.error('Create topic failed:', JSON.stringify(topicRes));
@@ -906,6 +914,8 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
           text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
           parse_mode: 'HTML'
         });
+        // 降级：本条转发到管理员私聊
+        forwardChatId = bot.adminUid;
       }
     }
   }
@@ -920,23 +930,15 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
 
   let forwardReq = await copyMessage(bot, forwardBody);
 
-  // 话题模式下转发失败且带话题映射：话题可能已被手动删除 -> 清映射、重建话题、重试一次
+  // 话题模式下转发失败且带话题映射：话题可能已被手动删除 -> 清映射（下次消息按冷却规则重建），本条降级到管理员私聊
   if (!forwardReq.ok && bot.topicMode && bot.supergroupId && topicId) {
     await bot.db.prepare('DELETE FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).run();
-    let title = `${message.chat.first_name || ''} ${message.chat.last_name || ''}`.trim();
-    if (message.chat.username) title += ` (@${message.chat.username})`;
-    if (!title) title = `User ${chatId}`;
-    if (title.length > 128) title = title.substring(0, 125) + '...';
-    const topicRes = await createForumTopic(bot, bot.supergroupId, title);
-    if (topicRes.ok) {
-      topicId = String(topicRes.result.message_thread_id);
-      await bot.db.prepare('INSERT OR REPLACE INTO chat_topic_mappings (bot_id, chat_id, topic_id) VALUES (?, ?, ?)')
-        .bind(bot.id, String(chatId), topicId).run();
-      forwardBody.message_thread_id = parseInt(topicId);
-      forwardReq = await copyMessage(bot, forwardBody);
-      // 新话题：重置信息卡标记，稍后重新发信息卡
-      await setUserState(bot, chatId, { first_card_sent: 0 });
-    }
+    await setUserState(bot, chatId, { first_card_sent: 0 });
+    forwardChatId = bot.adminUid;
+    topicId = null;
+    delete forwardBody.message_thread_id;
+    forwardBody.chat_id = forwardChatId;
+    forwardReq = await copyMessage(bot, forwardBody);
   }
 
   if (forwardReq.ok) {
@@ -1551,7 +1553,11 @@ async function autoRegisterWebhook(bot) {
   const path = bot.id === DEFAULT_BOT_ID ? WEBHOOK : `${WEBHOOK}/${bot.id}`;
   const webhookUrl = `${WORKER_ORIGIN}${path}`;
   const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: webhookUrl, secret_token: secret }))).json();
-  await requestTelegram(bot, 'setMyCommands', makeReqBody({ commands: BOT_COMMANDS }));
+  // 命令菜单仅注册到私聊（scope 限定），不影响群组；原作者版本无此调用，群组侧行为越少越好
+  await requestTelegram(bot, 'setMyCommands', makeReqBody({
+    scope: { type: 'bot_command_scope_all_private_chats' },
+    commands: BOT_COMMANDS
+  }));
   return r;
 }
 
