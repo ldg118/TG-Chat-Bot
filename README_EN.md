@@ -17,7 +17,7 @@ A Telegram message forwarding bot running on Cloudflare Workers, with anti-spam 
   - **Custom Q&A Verification**: maintain a bank of 1–20 questions instead of a single one; a random question is picked each time, and answers stay server-side.
   - **Security Levels**: Strict (mute), Standard (no media), Relaxed (no verification).
   - **Deduplication**: A user's identical content is not forwarded twice within 2 minutes.
-  - **Block/Trust**: Shadowban (`/block`) or permanently trust (`/trust`) users.
+  - **Block/Trust**: block users (`/block`, with a one-off unblock notice) or permanently trust them (`/trust`).
 - **Management Tools**:
   - **Broadcast**: Reply to a message to broadcast to all users (skips the blacklist).
   - **Visual Panel**: `/admin` menu with categorized, tap-to-run buttons.
@@ -131,18 +131,23 @@ Use `/bot` commands inside the admin panel (`/admin`) — configs are stored in 
     - Once passed, re-verification is skipped for **1 hour**; exceeding `MAX_MSG_PER_MIN` msgs/min forces re-verification. Blocked messages during verification are **stashed** and auto-sent after passing.
 3.  **Security Levels** (apply to unverified users only):
     - **Strict (1)**: cannot send anything. **Standard (2)**: text only, no media (default). **Relaxed (3)**: no verification.
-4.  **Shadowban**: `/block` drops a user's messages silently; they won't know.
-5.  **Command Abuse Guard**: admin commands (`/admin`, `/bot`, `/help`, …) only work for the admin. When a stranger sends one it is **not executed and not forwarded** to the group/topic. The stranger gets a short hint ("this command is admin-only; just send your message to reach the admin"), throttled to **once per user per 10 minutes** — repeats are silently ignored, so the hint can't be used to flood the API. The command menu is visible to all private-chat users (Telegram can't hide it per user), and this guard covers accidental taps.
+4.  **Blocking (a shadowban variant)**: `/block` stops a user's messages from being forwarded. The blocked user gets **one** notice ("you have been blocked; contact the admin to be unblocked") and is then **silent for 24 hours** (no replies, no forwarding). The notice is throttled (`BLOCK_HINT_COOLDOWN`) so it can't be abused to flood the API; `/unblock` clears the record so a re-block is announced immediately.
+5.  **Command Abuse Guard**: admin commands (`/admin`, `/bot`, `/help`, …) only work for the admin. When a stranger sends one it is **not executed and not forwarded** to the group/topic. The stranger gets a short hint ("this command is admin-only; just send your message to reach the admin"), throttled to **once per user per 10 minutes** — repeats are silently ignored, so the hint can't be used to flood the API.
+    - **Command menu visibility is configurable** (`/bot cmd all|admin|off`, or toggle it in the panel under "🤖 Bot Manager"; per-bot, applied instantly):
+      - `all` (default): the command menu is visible to all private-chat users;
+      - `admin`: visible only in the admin's private chat — strangers typing `/` no longer see admin commands;
+      - `off`: hidden for everyone (the admin can still type commands manually; panel buttons are unaffected).
 
 ## Admin Commands
 
 Send `/admin` for the visual panel (tap-to-run buttons):
 
 - **/info** — user info (reply to their message or send in their topic).
-- **/trust** / **/untrust** — permanently trust (skip all checks) / remove trust.
-- **/block** / **/unblock** — shadowban / unban.
+- **/trust** / **/untrust** — permanently trust (skip all checks) / remove trust (also clears the verification state that trust granted).
+- **/block** / **/unblock** — block / unblock.
+  > Destructive commands (**block**, **trust**, **clear**) require an explicit target: reply to that user's message, or send inside their topic. Panel buttons without context will not fall back to "the most recent sender", to avoid acting on the wrong user (`/info` is read-only and still allows that fallback).
 - **/blacklist** — view the blocked list.
-- **/broadcast** — reply to a message to broadcast to all (skips blocked).
+- **/broadcast** — reply to a message to broadcast to all (skips blocked). Sends are paced at ~25/s and stop **voluntarily** when nearing the platform time limit or on a 429, reporting how many recipients were not reached — so a truncated run is never reported as complete. Large audiences may need several broadcasts.
 - **/security <1|2|3>** — set security level.
 - **/verify <math|off|show>** — switch verification mode / show config.
 - **/verify custom q | a** — replace the bank with a single question; **/verify add q | a** appends one (max 20).
@@ -150,15 +155,16 @@ Send `/admin` for the visual panel (tap-to-run buttons):
 - **/math ops +-*/** / **/math range 1 9** / **/math count 4** / **/math show** — configure the math bank.
 - **/keyword list|add word|del word|reset** — manage keyword blacklist.
 - **/lang <zh|en>** — switch UI language.
-- **/welcome text** — custom `/start` welcome (supports `{uid}`).
+- **/welcome text** — custom `/start` welcome (supports `{uid}`); `/welcome reset` restores the default.
 - **/clear** — clear a user's mappings and topic binding; `/clear all` wipes everything.
 - **/mode <private|topic>** — switch operating mode.
 - **/bot list|add|del|set** — manage multiple bots (stored in D1, webhook auto-registered, no Cloudflare needed).
+- **/bot cmd <all|admin|off>** — command menu visibility (default `all`; `admin` = admin only; `off` = hidden), applied instantly, per bot.
 - **/help** — full command reference.
 
 ### Permission Model (/trust vs /block vs /unblock)
 
-- **/block**: blacklists and clears trust/verification; messages dropped silently.
+- **/block**: blacklists and clears trust/verification; pending challenge and stashed message are dropped. The user gets one "you have been blocked" notice, then 24 hours of silence.
 - **/unblock**: removes from blacklist only; the user returns to normal (still subject to security level).
 - **/trust**: skips all checks (no verification/keyword/dedup) and auto-unblocks. Highest priority, mutually exclusive with block.
 

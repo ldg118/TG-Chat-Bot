@@ -16,6 +16,12 @@ const CODE_TTL_SECONDS = 300;    // 验证码/题目有效期 5 分钟
 const MAX_VERIFY_ATTEMPTS = 3;   // 同一轮验证允许答错的次数，超限需重新发消息触发
 const MAX_CUSTOM_ITEMS = 20;     // 自定义问答题库条数上限
 const CMD_HINT_COOLDOWN = 600;   // 非管理员指令提示的冷却时间（秒），期间重复发送静默忽略
+const BLOCK_HINT_COOLDOWN = 24 * 3600; // 被屏蔽用户的提示冷却（秒），其余时间静默
+// 广播：waitUntil 的有效期约 30 秒，留出余量；每条间隔 ~40ms（约 25 条/秒），低于 Telegram 的 30 条/秒上限
+const BROADCAST_TIME_BUDGET_MS = 25000;
+const BROADCAST_SEND_INTERVAL_MS = 40;
+// 管理端展示时间所用的时区。Worker 运行时默认是 UTC，不指定会导致信息卡时间比本地早 8 小时。
+const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const DEDUPE_TTL_SECONDS = 120; // 去重哈希 2 分钟过期（仅防短时刷屏，正常复述/确认不受影响）
 const TOPIC_CREATE_COOLDOWN = 600; // 同一用户建话题失败后冷却 10 分钟（防群级限流）
 const DEFAULT_LANG = 'zh';
@@ -61,6 +67,10 @@ const STRINGS = {
     en: '⛔ This command is admin-only.\n\nTo reach the admin, just send your message directly.'
   },
   'block.done': { zh: '🚫 <b>已屏蔽用户</b>\n用户 <code>{uid}</code> 已进入黑名单并清除信任状态。', en: '🚫 <b>User blocked</b>\nUser <code>{uid}</code> is blacklisted and trust cleared.' },
+  'blocked.hint': {
+    zh: '🚫 你已被屏蔽，消息无法送达。\n\n如需恢复，请联系管理员解封。',
+    en: '🚫 You have been blocked, so your messages cannot be delivered.\n\nPlease contact the admin to be unblocked.'
+  },
   'unblock.done': { zh: '✅ <b>已解除屏蔽</b>\n用户 <code>{uid}</code> 已恢复正常状态。', en: '✅ <b>User unblocked</b>\nUser <code>{uid}</code> is restored to normal.' },
   'trust.done': { zh: '🌟 <b>已设置永久信任</b>\n用户 <code>{uid}</code> 将免除验证并移出黑名单。', en: '🌟 <b>Trusted</b>\nUser <code>{uid}</code> skips all checks and is removed from blacklist.' },
   'untrust.done': { zh: '↩️ 已取消用户 <code>{uid}</code> 的永久信任。', en: '↩️ Permanent trust removed for user <code>{uid}</code>.' },
@@ -81,10 +91,11 @@ const STRINGS = {
     en: '🪪 <b>New user</b>\nName: {name}\nUsername: {username}\nUserID: <code>{uid}</code>\nFirst seen: {time}'
   },
   'welcome.usage': {
-    zh: '用法: <code>/welcome 欢迎语</code>（可用 <code>{uid}</code> 占位符显示用户ID）\n当前欢迎语:\n{welcome}',
-    en: 'Usage: <code>/welcome &lt;text&gt;</code> (use <code>{uid}</code> placeholder)\nCurrent welcome:\n{welcome}'
+    zh: '用法: <code>/welcome 欢迎语</code>（可用 <code>{uid}</code> 占位符显示用户ID）\n<code>/welcome reset</code> 恢复默认欢迎语\n当前欢迎语:\n{welcome}',
+    en: 'Usage: <code>/welcome &lt;text&gt;</code> (use <code>{uid}</code> placeholder)\n<code>/welcome reset</code> restore the default\nCurrent welcome:\n{welcome}'
   },
   'welcome.set': { zh: '✅ 用户欢迎语已更新。', en: '✅ User welcome message updated.' },
+  'welcome.reset': { zh: '✅ 用户欢迎语已恢复为默认。', en: '✅ User welcome message restored to default.' },
   'keyword.usage': {
     zh: '用法:\n<code>/keyword list</code> 查看关键词\n<code>/keyword add 词</code> 添加\n<code>/keyword del 词</code> 删除\n<code>/keyword reset</code> 恢复默认',
     en: 'Usage:\n<code>/keyword list</code> list keywords\n<code>/keyword add &lt;word&gt;</code> add\n<code>/keyword del &lt;word&gt;</code> delete\n<code>/keyword reset</code> restore defaults'
@@ -156,12 +167,12 @@ const STRINGS = {
     en: '🛠 <b>Admin Panel</b>\n\n🧭 {mode} | 🛡 {sec} | 🔐 {verify}\n📃 Keywords {kw} | 🌐 {lang}\n🤖 Bot: <code>{botId}</code> | SG: <code>{sg}</code>\n\nTap buttons below to execute; type <code>/</code> for the command menu; <code>/help</code> for the full list.'
   },
   'help.text': {
-    zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|off|show</code> 验证方式\n<code>/verify custom 问题|答案</code> 设为唯一题 | <code>/verify add 问题|答案</code> 追加\n<code>/verify list</code> 题库 | <code>/verify del 编号</code> 删除 | <code>/verify clear</code> 清空\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
-    en: '📖 <b>Command Reference</b>\n\n<b>Users</b> (reply to their msg or send in their topic)\n<code>/info</code> | <code>/trust</code> | <code>/untrust</code>\n<code>/block</code> | <code>/unblock</code> | <code>/blacklist</code>\n<code>/clear</code> user mappings | <code>/clear all</code>\n\n<b>System</b>\n<code>/mode private|topic</code>\n<code>/security 1|2|3</code> strict|standard|relaxed\n<code>/verify math|off|show</code>\n<code>/verify custom q|a</code> set one | <code>/verify add q|a</code> add\n<code>/verify list</code> | <code>/verify del n</code> | <code>/verify clear</code>\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code>\n<code>/keyword list|add w|del w|reset</code>\n<code>/lang zh|en</code>\n<code>/welcome text</code> (supports {uid})\n\n<b>Bots</b>\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code> | <code>/bot set id token|admin|sg|max value</code>\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg (skips blocked users)'
+    zh: '📖 <b>指令说明</b>\n\n<b>用户管理</b>（回复目标消息或在其话题内发送）\n<code>/info</code> 用户信息 | <code>/trust</code> 永久信任 | <code>/untrust</code> 取消信任\n<code>/block</code> 屏蔽 | <code>/unblock</code> 解除 | <code>/blacklist</code> 黑名单列表\n<code>/clear</code> 清除该用户映射 | <code>/clear all</code> 清空全部\n\n<b>系统设置</b>\n<code>/mode private|topic</code> 运行模式\n<code>/security 1|2|3</code> 严格|标准|宽松\n<code>/verify math|off|show</code> 验证方式\n<code>/verify custom 问题|答案</code> 设为唯一题 | <code>/verify add 问题|答案</code> 追加\n<code>/verify list</code> 题库 | <code>/verify del 编号</code> 删除 | <code>/verify clear</code> 清空\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code> 题库\n<code>/keyword list|add 词|del 词|reset</code> 关键词黑名单\n<code>/lang zh|en</code> 界面语言\n<code>/welcome 文本</code> 用户欢迎语（支持 {uid}）| <code>/welcome reset</code> 恢复默认\n\n<b>机器人管理</b>\n<code>/bot list</code> 机器人列表\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加并自动注册\n<code>/bot del id</code> 删除并注销 | <code>/bot set id token|admin|sg|max 值</code>\n<code>/bot cmd all|admin|off</code> 命令菜单可见性\n\n<b>广播</b>\n<code>/broadcast</code> 回复一条消息全员广播（自动跳过黑名单）',
+    en: '📖 <b>Command Reference</b>\n\n<b>Users</b> (reply to their msg or send in their topic)\n<code>/info</code> | <code>/trust</code> | <code>/untrust</code>\n<code>/block</code> | <code>/unblock</code> | <code>/blacklist</code>\n<code>/clear</code> user mappings | <code>/clear all</code>\n\n<b>System</b>\n<code>/mode private|topic</code>\n<code>/security 1|2|3</code> strict|standard|relaxed\n<code>/verify math|off|show</code>\n<code>/verify custom q|a</code> set one | <code>/verify add q|a</code> add\n<code>/verify list</code> | <code>/verify del n</code> | <code>/verify clear</code>\n<code>/math ops +-*/ | range 1 9 | count 4 | show</code>\n<code>/keyword list|add w|del w|reset</code>\n<code>/lang zh|en</code>\n<code>/welcome text</code> (supports {uid}) | <code>/welcome reset</code>\n\n<b>Bots</b>\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code> | <code>/bot set id token|admin|sg|max value</code>\n<code>/bot cmd all|admin|off</code> menu visibility\n\n<b>Broadcast</b>\n<code>/broadcast</code> reply to a msg (skips blocked users)'
   },
   'bot.usage': {
-    zh: '用法:\n<code>/bot list</code> 查看机器人\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加\n<code>/bot del id</code> 删除\n<code>/bot set id token|admin|sg|max 值</code> 修改',
-    en: 'Usage:\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code>\n<code>/bot set id token|admin|sg|max value</code>'
+    zh: '用法:\n<code>/bot list</code> 查看机器人\n<code>/bot add id token UID [sg] [topic] [max]</code> 添加\n<code>/bot del id</code> 删除\n<code>/bot set id token|admin|sg|max 值</code> 修改\n<code>/bot cmd all|admin|off</code> 命令菜单可见性',
+    en: 'Usage:\n<code>/bot list</code>\n<code>/bot add id token UID [sg] [topic] [max]</code>\n<code>/bot del id</code>\n<code>/bot set id token|admin|sg|max value</code>\n<code>/bot cmd all|admin|off</code> command menu visibility'
   },
   'bot.list.title': { zh: '机器人列表', en: 'Bot list' },
   'bot.list.empty': { zh: '（D1 中暂无记录，当前仅环境变量配置的机器人）', en: '(no bots in D1; env-configured bots only)' },
@@ -178,6 +189,15 @@ const STRINGS = {
   'bot.notfound': { zh: '⚠️ 未找到机器人 <code>{id}</code>。', en: '⚠️ Bot <code>{id}</code> not found.' },
   'bot.set.usage': { zh: '用法: <code>/bot set id token|admin|sg|max 值</code>', en: 'Usage: <code>/bot set id token|admin|sg|max value</code>' },
   'bot.set.ok': { zh: '✅ 已更新机器人 <code>{id}</code> 的 <code>{f}</code>。如改 token/admin 请重新注册 webhook。', en: '✅ Updated <code>{f}</code> for bot <code>{id}</code>. Re-register webhook if token/admin changed.' },
+  'bot.cmd.usage': {
+    zh: '用法: <code>/bot cmd all|admin|off</code>\nall = 所有私聊用户可见（默认）\nadmin = 仅管理员可见\noff = 完全关闭\n当前: {cur}',
+    en: 'Usage: <code>/bot cmd all|admin|off</code>\nall = visible to all private chats (default)\nadmin = admin only\noff = hidden for everyone\nCurrent: {cur}'
+  },
+  'bot.cmd.set': { zh: '✅ 命令菜单可见性已设为：<b>{name}</b>', en: '✅ Command menu visibility set to: <b>{name}</b>' },
+  'bot.cmd.fail': { zh: '❌ 设置失败: {err}', en: '❌ Failed to apply: {err}' },
+  'bot.cmd.name.all': { zh: '所有人可见', en: 'Visible to all' },
+  'bot.cmd.name.admin': { zh: '仅管理员可见', en: 'Admin only' },
+  'bot.cmd.name.off': { zh: '已关闭', en: 'Off' },
   'map.notfound': { zh: '⚠️ 无法找到该消息的原始发送者 (可能已被清除)', en: '⚠️ Original sender not found for this message (mapping cleared?)' },
   'topic.create_fail': {
     zh: '⚠️ <b>话题创建失败</b>\nUID: {uid}\nError: {err}\n\n{hint}',
@@ -192,9 +212,14 @@ const STRINGS = {
     en: 'Ensure the bot is a group admin with "Manage Topics" permission.'
   },
   'forward.fail': { zh: '❌ <b>消息转发失败</b>\n目标 UID: {uid}\n原因: {err}', en: '❌ <b>Forward failed</b>\nTarget UID: {uid}\nReason: {err}' },
+  'reply.fail': {
+    zh: '❌ <b>回复发送失败</b>\n目标 UID: {uid}\n原因: {err}\n\n<i>对方可能已拉黑机器人，或会话已失效。</i>',
+    en: '❌ <b>Reply failed to send</b>\nTarget UID: {uid}\nReason: {err}\n\n<i>The user may have blocked the bot or the chat is gone.</i>'
+  },
   'broadcast.usage': { zh: '⚠️ <b>使用错误</b>\n\n请回复一条您想要广播的消息，并输入 <code>/broadcast</code>', en: '⚠️ <b>Usage error</b>\n\nReply to a message you want to broadcast with <code>/broadcast</code>' },
   'broadcast.start': { zh: '📢 <b>正在开始广播...</b>\n\n目标：所有用户', en: '📢 <b>Broadcasting...</b>\n\nTarget: all users' },
   'broadcast.done': { zh: '✅ <b>广播完成</b>\n\n成功发送: {ok} 人\n失败: {fail} 人\n跳过(黑名单): {skip} 人', en: '✅ <b>Broadcast done</b>\n\nSent: {ok}\nFailed: {fail}\nSkipped (blocked): {skip}' },
+  'broadcast.partial': { zh: '\n\n⚠️ 因运行时间/限流限制提前结束，约 {n} 人未发送，请稍后再广播一次。', en: '\n\n⚠️ Stopped early due to time/rate limits; about {n} recipients were not reached. Please broadcast again later.' },
   'broadcast.error': { zh: '❌ <b>广播过程中出错</b>\n\n{err}', en: '❌ <b>Broadcast error</b>\n\n{err}' }
 };
 
@@ -242,7 +267,7 @@ const cmdHintCooldown = new Map();
 async function resolveBot(env, botId) {
   // bots 行与 settings 批量查询合并为一次 D1 往返
   const keys = ['config:lang', 'config:security_level', 'config:verify_mode', 'config:enable_topic_group',
-    'config:math_ops', 'config:math_min', 'config:math_max', 'config:math_count', 'system:keywords_seeded'];
+    'config:math_ops', 'config:math_min', 'config:math_max', 'config:math_count', 'system:keywords_seeded', 'config:cmd_scope'];
   let cfg = null;
   const m = {};
   if (env.D1) {
@@ -294,6 +319,8 @@ async function resolveBot(env, botId) {
     max: parseInt(m['config:math_max'] || '9'),
     count: parseInt(m['config:math_count'] || '6')
   };
+  const scope = m['config:cmd_scope'];
+  bot.cmdScope = (scope === 'admin' || scope === 'off') ? scope : 'all';
   return bot;
 }
 
@@ -578,7 +605,7 @@ function generateMathChallenge(math) {
 
 // 生成一道算术题的卡片（题目文本 + 选项按钮 + 正确项下标）。
 // 首次发卡与答错换题共用，保证两处逻辑一致。
-function buildMathCard(bot, chatId) {
+function buildMathCard(bot) {
   const challenge = generateMathChallenge(bot.math);
   const options = [
     { text: challenge.correct_answer, isCorrect: true },
@@ -587,7 +614,7 @@ function buildMathCard(bot, chatId) {
   shuffleArray(options);
   const buttons = options.map((opt, idx) => ({
     text: opt.text,
-    callback_data: `verify:${chatId}:${idx}`
+    callback_data: `verify:${idx}`
   }));
   const rows = [];
   for (let i = 0; i < buttons.length; i += 2) {
@@ -661,6 +688,7 @@ function escapeHtml(s) {
 
 // Telegram 官方命令菜单（输入 / 时弹出可点击列表），注册 webhook 与自动注册共用
 const BOT_COMMANDS = [
+  { command: 'help', description: '全部指令 / All commands' },
   { command: 'admin', description: '管理面板 / Admin panel' },
   { command: 'info', description: '用户信息 / User info' },
   { command: 'trust', description: '永久信任 / Trust user' },
@@ -793,25 +821,18 @@ async function onMessage(bot, message) {
     return new Response('Ok');
   }
 
-  if (message.text === '/start') {
-    let startMsg;
-    if (message.chat.id.toString() === bot.adminUid) {
-      startMsg = t(bot, 'welcome.admin', {
+  // /start：管理员在私聊里显示管理面板欢迎语；
+  // 普通用户的 /start 交给 handleGuestMessage 处理，以确保先过黑名单检查（否则封禁用户仍会收到欢迎语）
+  if (message.text === '/start' && message.chat.id.toString() === bot.adminUid) {
+    return sendMessage(bot, {
+      chat_id: message.chat.id,
+      text: t(bot, 'welcome.admin', {
         uid: message.chat.id,
         mode: bot.topicMode ? t(bot, 'mode.topic') : t(bot, 'mode.private'),
         sgWarn: (bot.topicMode && !bot.supergroupId) ? t(bot, 'mode.warn.nosg') : ''
-      });
-    } else {
-      const customWelcome = await settingGet(bot, 'config:welcome');
-      if (customWelcome) {
-        // 支持 {uid} 占位符；注入的 UID 包成 <code> 以便用户点击复制，
-        // 自定义文案本身仍整体转义，避免 HTML 注入
-        startMsg = escapeHtml(customWelcome).split('{uid}').join(`<code>${message.chat.id}</code>`);
-      } else {
-        startMsg = t(bot, 'welcome.user', { uid: message.chat.id });
-      }
-    }
-    return sendMessage(bot, { chat_id: message.chat.id, text: startMsg, parse_mode: 'HTML' });
+      }),
+      parse_mode: 'HTML'
+    });
   }
 
   if (bot.supergroupId && message.chat.id.toString() === bot.supergroupId) {
@@ -853,6 +874,27 @@ async function dispatchAdminCommand(bot, text, message) {
   return undefined;
 }
 
+// 管理员回复用户（复制原消息）。失败时在原对话位置告知管理员，
+// 否则对方拉黑机器人等情况会导致消息静默丢失，双方都不知情。
+async function forwardAdminReply(bot, guestChatId, message) {
+  const r = await copyMessage(bot, {
+    chat_id: guestChatId,
+    from_chat_id: message.chat.id,
+    message_id: message.message_id
+  });
+  if (r && r.ok) return r;
+  console.error('Admin reply failed:', JSON.stringify(r));
+  try {
+    await sendMessage(bot, {
+      chat_id: message.chat.id,
+      message_thread_id: message.message_thread_id,
+      text: t(bot, 'reply.fail', { uid: guestChatId, err: escapeHtml((r && r.description) || 'Unknown') }),
+      parse_mode: 'HTML'
+    });
+  } catch (e) { /* 告警失败不影响主流程 */ }
+  return r;
+}
+
 async function handleAdminMessage(bot, message) {
   if (message.text) {
     const r = await dispatchAdminCommand(bot, message.text.trim(), message);
@@ -876,7 +918,7 @@ async function handleAdminMessage(bot, message) {
     }
 
     if (userId && userId.toString() !== bot.adminUid) {
-      return copyMessage(bot, { chat_id: userId, from_chat_id: message.chat.id, message_id: message.message_id });
+      return forwardAdminReply(bot, userId, message);
     }
 
     // 未绑定话题：静默忽略（不转发、不提示）
@@ -887,7 +929,7 @@ async function handleAdminMessage(bot, message) {
       const map = await bot.db.prepare('SELECT guest_chat_id FROM message_mappings WHERE bot_id = ? AND admin_message_id = ?')
         .bind(bot.id, String(message.reply_to_message.message_id)).first();
       if (map) {
-        return copyMessage(bot, { chat_id: map.guest_chat_id, from_chat_id: message.chat.id, message_id: message.message_id });
+        return forwardAdminReply(bot, map.guest_chat_id, message);
       }
       if (message.chat.id.toString() === bot.adminUid) {
         return sendMessage(bot, {
@@ -904,21 +946,6 @@ async function handleAdminMessage(bot, message) {
 
 async function handleGuestMessage(bot, message) {
   const chatId = message.chat.id;
-
-  // 陌生人发送管理员指令（如 /admin、/bot list）：指令不会执行，也不转发到群组/话题。
-  // 提示本身也是一次 Telegram 调用，若每条都回复会被滥用刷接口，故同一机器人下的同一用户
-  // 10 分钟内只提示一次，期间重复发送静默忽略；提前返回同时省掉后续的 D1 查询。
-  if (message.text && isAdminCommandText(message.text)) {
-    const key = `${bot.id}:${chatId}`;
-    const last = cmdHintCooldown.get(key) || 0;
-    if (Date.now() - last >= CMD_HINT_COOLDOWN * 1000) {
-      if (cmdHintCooldown.size > 10000) cmdHintCooldown.clear();
-      cmdHintCooldown.set(key, Date.now());
-      await sendMessage(bot, { chat_id: chatId, text: t(bot, 'cmd.admin_only'), parse_mode: 'HTML' });
-    }
-    return new Response('Ok');
-  }
-
   const now = Math.floor(Date.now() / 1000);
   // 用户状态 / 关键词 / 去重哈希三个读操作互不依赖，并行执行省两次串行往返
   const textHash = message.text ? await sha256(message.text.trim()) : null;
@@ -931,12 +958,44 @@ async function handleGuestMessage(bot, message) {
       : Promise.resolve(null)
   ]);
 
-  // 1. 黑名单检查（trusted 权限高于 blocked）
+  // 1. 黑名单检查（trusted 权限高于 blocked）。封禁用户 24 小时内只提示一次，
+  //    其余消息静默忽略；后续所有分支（含 /start 欢迎语、指令提示）都必须排在这一步之后。
   if (state.is_blocked && !state.is_trusted) {
+    const hintKey = `blockhint:${chatId}`;
+    const lastHint = parseInt((await settingGet(bot, hintKey)) || '0');
+    if (now - lastHint >= BLOCK_HINT_COOLDOWN) {
+      await settingSet(bot, hintKey, String(now));
+      await sendMessage(bot, { chat_id: chatId, text: t(bot, 'blocked.hint'), parse_mode: 'HTML' });
+    }
     return new Response('Ok');
   }
 
-  // 2. 自定义问答等待中（仅 custom 模式拦截文本作答；已验证/信任用户不受影响）
+  // 2. /start 欢迎语（仅普通用户；管理员私聊的 /start 已在 onMessage 里处理）
+  if (message.text === '/start') {
+    const customWelcome = await settingGet(bot, 'config:welcome');
+    // 支持 {uid} 占位符；注入的 UID 包成 <code> 以便用户点击复制，
+    // 自定义文案本身仍整体转义，避免 HTML 注入
+    const startMsg = customWelcome
+      ? escapeHtml(customWelcome).split('{uid}').join(`<code>${chatId}</code>`)
+      : t(bot, 'welcome.user', { uid: chatId });
+    return sendMessage(bot, { chat_id: chatId, text: startMsg, parse_mode: 'HTML' });
+  }
+
+  // 3. 陌生人发送管理员指令（如 /admin、/bot list）：指令不会执行，也不转发到群组/话题。
+  //    提示本身也是一次 Telegram 调用，若每条都回复会被滥用刷接口，故同一机器人下的同一用户
+  //    10 分钟内只提示一次，期间重复发送静默忽略。
+  if (message.text && isAdminCommandText(message.text)) {
+    const key = `${bot.id}:${chatId}`;
+    const last = cmdHintCooldown.get(key) || 0;
+    if (Date.now() - last >= CMD_HINT_COOLDOWN * 1000) {
+      if (cmdHintCooldown.size > 10000) cmdHintCooldown.clear();
+      cmdHintCooldown.set(key, Date.now());
+      await sendMessage(bot, { chat_id: chatId, text: t(bot, 'cmd.admin_only'), parse_mode: 'HTML' });
+    }
+    return new Response('Ok');
+  }
+
+  // 4. 自定义问答等待中（仅 custom 模式拦截文本作答；已验证/信任用户不受影响）
   const stillVerified = state.is_verified && state.verified_expiry > now;
   if (bot.verifyMode === 'custom' && state.pending_answer && state.pending_code_expiry > now && !state.is_trusted && !stillVerified) {
     const isText = !!message.text;
@@ -979,7 +1038,7 @@ async function handleGuestMessage(bot, message) {
     return new Response('Ok');
   }
 
-  // 3. 频率限制（60 秒固定窗口）
+  // 5. 频率限制（60 秒固定窗口）
   let newCount, newWindow;
   if (!state.window_start || (now - state.window_start) >= 60) {
     newCount = 1;
@@ -999,7 +1058,7 @@ async function handleGuestMessage(bot, message) {
     return sendVerificationChallenge(bot, chatId, message.message_id);
   }
 
-  // 4. 验证状态判定
+  // 6. 验证状态判定
   const isTrusted = !!state.is_trusted;
   const isVerified = !isTrusted && state.is_verified && state.verified_expiry > now;
   const securityLevel = bot.security;
@@ -1019,7 +1078,7 @@ async function handleGuestMessage(bot, message) {
     allowed = false;
   }
 
-  // 5. 被拦截 -> 验证挑战
+  // 7. 被拦截 -> 验证挑战
   if (!allowed) {
     // 暂存被拦截的消息，验证通过后自动补转发，用户无需重发
     return sendVerificationChallenge(bot, chatId, message.message_id, {
@@ -1030,7 +1089,7 @@ async function handleGuestMessage(bot, message) {
     });
   }
 
-  // 6. 放行 -> 关键词/去重检查（仅文本，trusted 豁免；两者已在入口并行预取）
+  // 8. 放行 -> 关键词/去重检查（仅文本，trusted 豁免；两者已在入口并行预取）
   if (message.text && !isTrusted) {
     const words = keywords || await getKeywords(bot);
     const hit = words.some(k => keywordHit(message.text, k));
@@ -1094,7 +1153,7 @@ async function ensureTopicInner(bot, chatId, message, now) {
     await settingSet(bot, 'topic:last_alert', String(now));
     await sendMessage(bot, {
       chat_id: bot.adminUid,
-      text: t(bot, 'topic.create_fail', { uid: chatId, err: errDesc, hint }),
+      text: t(bot, 'topic.create_fail', { uid: chatId, err: escapeHtml(errDesc), hint }),
       parse_mode: 'HTML'
     });
   }
@@ -1171,7 +1230,7 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
     console.error('Forward/Copy message failed:', JSON.stringify(forwardReq));
     await sendMessage(bot, {
       chat_id: bot.adminUid,
-      text: t(bot, 'forward.fail', { uid: chatId, err: forwardReq.description || 'Unknown' }),
+      text: t(bot, 'forward.fail', { uid: chatId, err: escapeHtml(forwardReq.description || 'Unknown') }),
       parse_mode: 'HTML'
     });
   }
@@ -1180,6 +1239,11 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
 // 验证通过后补转发暂存的消息
 async function deliverPendingForward(bot, chatId, state) {
   if (!state.pending_forward) return;
+  // 双重保险：即使上游漏判，封禁用户也不得把暂存消息补发出去
+  if (state.is_blocked && !state.is_trusted) {
+    await setUserState(bot, chatId, { pending_forward: null });
+    return;
+  }
   let stash = null;
   try { stash = JSON.parse(state.pending_forward); } catch (e) { /* ignore */ }
   await setUserState(bot, chatId, { pending_forward: null });
@@ -1209,9 +1273,9 @@ async function sendFirstCard(bot, { chatId, message, topicMode, topicId = null }
       chat_id: targetChat,
       text: t(bot, 'pin.card', {
         name: escapeHtml(`${message.chat.first_name || ''} ${message.chat.last_name || ''}`.trim() || '—'),
-        username: message.chat.username ? '@' + message.chat.username : '—',
+        username: message.chat.username ? '@' + escapeHtml(message.chat.username) : '—',
         uid: chatId,
-        time: new Date().toLocaleString(bot.lang === 'zh' ? 'zh-CN' : 'en-US')
+        time: new Date().toLocaleString(bot.lang === 'zh' ? 'zh-CN' : 'en-US', { timeZone: DISPLAY_TIMEZONE })
       }),
       parse_mode: 'HTML'
     };
@@ -1325,7 +1389,7 @@ async function sendVerificationChallenge(bot, chatId, pendingMsgId, stash = null
     await sendMessage(bot, { chat_id: chatId, text: t(bot, 'verify.custom_notset') });
   }
 
-  const card = buildMathCard(bot, chatId);
+  const card = buildMathCard(bot);
   await setUserState(bot, chatId, {
     pending_answer: String(card.correctIndex),
     pending_question: card.question,
@@ -1373,7 +1437,10 @@ async function handleCallback(bot, callbackQuery) {
       message_id: callbackQuery.message.message_id,
       message_thread_id: callbackQuery.message.message_thread_id,
       text: cmdText,
-      allowLastGuest: true
+      // 面板按钮没有回复上下文。只有只读的 /info 允许回退到「最近来信的用户」；
+      // 屏蔽/信任/清除等破坏性操作必须显式指定目标（回复消息或在该用户话题内），
+      // 否则容易误伤到并非你想操作的那个人。
+      allowLastGuest: /^\/info\b/.test(cmdText)
     };
     // 应答按钮与执行指令并行，省一次 Telegram 往返
     const ack = answerCallbackQuery(bot, callbackQuery.id, '✅');
@@ -1384,12 +1451,22 @@ async function handleCallback(bot, callbackQuery) {
 
   if (!data.startsWith('verify:')) return;
 
-  const [_, __, answerIdxStr] = data.split(':');
-  const answerIdx = parseInt(answerIdxStr);
+  // 取末段作为选项下标：新格式 verify:{idx}；旧卡片残留的 verify:{chatId}:{idx} 同样兼容
+  const parts = data.split(':');
+  const answerIdx = parseInt(parts[parts.length - 1]);
   const chatId = callbackQuery.message.chat.id;
   const now = Math.floor(Date.now() / 1000);
 
   const state = await getUserState(bot, chatId);
+
+  // 已被屏蔽的用户不得再通过验证卡穿透封禁：清掉待答状态与暂存消息，给出中性回应
+  if (state.is_blocked && !state.is_trusted) {
+    await setUserState(bot, chatId, {
+      pending_answer: null, pending_question: null, pending_code_expiry: 0,
+      pending_attempts: 0, pending_msg_id: 0, pending_forward: null
+    });
+    return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.expired'), true);
+  }
 
   if (!state.pending_answer || state.pending_answer === 'CLAIMED' || state.pending_code_expiry <= now) {
     return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.expired'), true);
@@ -1403,12 +1480,9 @@ async function handleCallback(bot, callbackQuery) {
       pending_answer: null, pending_question: null, pending_code_expiry: 0, pending_attempts: 0, pending_msg_id: 0,
       is_rate_limited: 0, message_count: 0, window_start: 0
     });
-    await requestTelegram(bot, 'editMessageText', makeReqBody({
-      chat_id: chatId,
-      message_id: callbackQuery.message.message_id,
-      text: t(bot, 'verify.passed'),
-      parse_mode: 'HTML'
-    }));
+    // 用 editVerifyCard 改写卡片并清空按钮：editMessageText 省略 reply_markup 会保留原键盘，
+    // 导致「验证通过」下面仍挂着可点的答案按钮
+    await editVerifyCard(bot, chatId, callbackQuery.message.message_id, t(bot, 'verify.passed'), null);
     await deliverPendingForward(bot, chatId, state);
     return answerCallbackQuery(bot, callbackQuery.id, '✅');
   } else {
@@ -1419,7 +1493,7 @@ async function handleCallback(bot, callbackQuery) {
       return answerCallbackQuery(bot, callbackQuery.id, t(bot, 'verify.wrong'), true);
     }
     // 答错即换新题：原地替换卡片，题目与选项全部刷新
-    const card = buildMathCard(bot, chatId);
+    const card = buildMathCard(bot);
     await setUserState(bot, chatId, {
       pending_answer: String(card.correctIndex),
       pending_question: card.question,
@@ -1487,7 +1561,8 @@ async function handleTrustCommand(bot, message) {
 async function handleUntrustCommand(bot, message) {
   const userId = await getTargetUserId(bot, message);
   if (!userId) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'target.unknown'), message_thread_id: message.message_thread_id });
-  await setUserState(bot, userId, { is_trusted: 0 });
+  // /trust 会附带 1 小时验证状态，取消信任时一并清除，避免用户仍处于免验证期
+  await setUserState(bot, userId, { is_trusted: 0, is_verified: 0, verified_expiry: 0 });
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'untrust.done', { uid: userId }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
@@ -1502,6 +1577,8 @@ async function handleUnblockCommand(bot, message) {
   const userId = await getTargetUserId(bot, message);
   if (!userId) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'target.unknown'), message_thread_id: message.message_thread_id });
   await setUserState(bot, userId, { is_blocked: 0 });
+  // 清除屏蔽提示记录，再次被封时可立即收到提示
+  await settingDel(bot, `blockhint:${userId}`);
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'unblock.done', { uid: userId }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
@@ -1525,8 +1602,13 @@ async function handleClearCommand(bot, message) {
     await bot.db.prepare('DELETE FROM message_mappings WHERE bot_id = ?').bind(bot.id).run();
     await bot.db.prepare('DELETE FROM chat_topic_mappings WHERE bot_id = ?').bind(bot.id).run();
     await settingDel(bot, 'pin:private');
-    const pins = await bot.db.prepare("SELECT key FROM settings WHERE bot_id = ? AND key LIKE 'pin:topic:%'").bind(bot.id).all();
-    for (const p of pins.results) await settingDel(bot, p.key);
+    // 一并清理历史卡片记录、屏蔽提示与建话题冷却，保持「清空全部」的语义
+    // 注意 LIKE 'topic:last:%' 不会匹配全局的 topic:last_alert（它后面没有冒号）
+    const leftovers = await bot.db.prepare(
+      `SELECT key FROM settings WHERE bot_id = ?
+       AND (key LIKE 'pin:topic:%' OR key LIKE 'blockhint:%' OR key LIKE 'topic:last:%')`
+    ).bind(bot.id).all();
+    for (const r of leftovers.results) await settingDel(bot, r.key);
     return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'clear.all.done'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   }
 
@@ -1534,6 +1616,8 @@ async function handleClearCommand(bot, message) {
   if (!userId) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'target.unknown'), message_thread_id: message.message_thread_id });
   await bot.db.prepare('DELETE FROM message_mappings WHERE bot_id = ? AND guest_chat_id = ?').bind(bot.id, String(userId)).run();
   await bot.db.prepare('DELETE FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(userId)).run();
+  await settingDel(bot, `blockhint:${userId}`);
+  await settingDel(bot, `topic:last:${userId}`);
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'clear.user.done', { uid: userId }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
@@ -1574,8 +1658,11 @@ async function handleKeywordCommand(bot, message) {
   }
 
   if (action === 'reset') {
+    // 直接批量插回默认词。不能走 ensureKeywordsSeeded：
+    // 它看到 system:keywords_seeded 标记会直接返回，导致"恢复了"但表其实是空的
     await bot.db.prepare('DELETE FROM keywords WHERE bot_id = ?').bind(bot.id).run();
-    await ensureKeywordsSeeded(bot);
+    const stmt = bot.db.prepare('INSERT OR IGNORE INTO keywords (bot_id, word) VALUES (?, ?)');
+    await bot.db.batch(DEFAULT_KEYWORDS.map(w => stmt.bind(bot.id, w)));
     return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'keyword.reset'), message_thread_id: message.message_thread_id });
   }
 
@@ -1765,6 +1852,10 @@ async function handleLangCommand(bot, message) {
 async function handleWelcomeCommand(bot, message) {
   const text = message.text.trim();
   const content = text.replace(/^\/welcome\s*/, '').trim();
+  if (content.toLowerCase() === 'reset') {
+    await settingDel(bot, 'config:welcome');
+    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'welcome.reset'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  }
   if (!content) {
     const cur = (await settingGet(bot, 'config:welcome')) || t(bot, 'welcome.user', { uid: '{uid}' });
     // 预览按模板原文显示，占位符保持 {uid}；剔除模板自带的 <code> 标签，避免看到原始标签
@@ -1826,6 +1917,8 @@ async function showMenuPanel(bot, chatId, threadId, panel, msgId = null) {
       keyboard = [
         [ { text: '📋 机器人列表', callback_data: 'cmd:/bot list' } ],
         [ { text: '📖 添加方法说明', callback_data: 'cmd:/bot' } ],
+        [ { text: `📜 菜单可见性: ${t(bot, 'bot.cmd.name.' + bot.cmdScope)}`, callback_data: 'cmd:/bot cmd' } ],
+        [ { text: '🌐 所有人', callback_data: 'cmd:/bot cmd all' }, { text: '👑 仅管理员', callback_data: 'cmd:/bot cmd admin' }, { text: '🚫 关闭', callback_data: 'cmd:/bot cmd off' } ],
         [ BACK_BTN ]
       ];
       break;
@@ -1856,16 +1949,45 @@ async function handleAdminMenu(bot, message) {
 
 // ---------------- 机器人管理（/bot） ----------------
 
+// 按 bot.cmdScope 应用命令菜单可见性：
+//   all   - 所有私聊用户可见（Telegram 默认注册方式）
+//   admin - 仅管理员私聊可见（先清全局作用域，再注册到管理员 chat）
+//   off   - 完全关闭（清掉两种作用域）
+// 返回 { ok, desc }。切换即时生效，与 webhook 注册无关。
+async function applyCommandScope(bot) {
+  // admin 档依赖可转为数字的管理员 UID，提前校验避免向 Telegram 发出 scope.chat_id=NaN 的无效请求
+  const adminChatId = Number(bot.adminUid);
+  const adminUidValid = bot.adminUid && Number.isFinite(adminChatId);
+  const scopes = ['all_private_chats', adminUidValid ? 'chat' : null];
+  // 先清掉所有已知作用域，避免旧菜单残留
+  for (const type of scopes) {
+    if (!type) continue;
+    const scope = type === 'chat' ? { type: 'chat', chat_id: adminChatId } : { type };
+    await requestTelegram(bot, 'deleteMyCommands', makeReqBody({ scope }));
+  }
+  if (bot.cmdScope === 'off') return { ok: true };
+  if (bot.cmdScope === 'admin') {
+    if (!adminUidValid) return { ok: false, desc: 'admin_uid is missing or not numeric' };
+    const r = await requestTelegram(bot, 'setMyCommands', makeReqBody({
+      scope: { type: 'chat', chat_id: adminChatId },
+      commands: BOT_COMMANDS
+    }));
+    return { ok: !!(r && r.ok), desc: r && r.description };
+  }
+  const r = await requestTelegram(bot, 'setMyCommands', makeReqBody({
+    scope: { type: 'all_private_chats' },
+    commands: BOT_COMMANDS
+  }));
+  return { ok: !!(r && r.ok), desc: r && r.description };
+}
+
 async function autoRegisterWebhook(bot) {
   const secret = await getBotSecret(bot);
   const path = bot.id === DEFAULT_BOT_ID ? WEBHOOK : `${WEBHOOK}/${bot.id}`;
   const webhookUrl = `${WORKER_ORIGIN}${path}`;
   const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: webhookUrl, secret_token: secret }))).json();
-  // 命令菜单仅注册到私聊（scope 限定），不影响群组；原作者版本无此调用，群组侧行为越少越好
-  await requestTelegram(bot, 'setMyCommands', makeReqBody({
-    scope: { type: 'all_private_chats' },
-    commands: BOT_COMMANDS
-  }));
+  // 命令菜单按当前 cmdScope 注册（默认 all_private_chats，不影响群组）
+  await applyCommandScope(bot);
   return r;
 }
 
@@ -1962,6 +2084,24 @@ async function handleBotCommand(bot, message) {
     return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.set.ok', { id, f: field }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   }
 
+  if (sub === 'cmd') {
+    // 命令菜单可见性：作用于当前机器人（面板按钮与指令都在当前机器人上下文执行）
+    const v = (parts[2] || '').toLowerCase();
+    if (!v) {
+      return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.usage', { cur: t(bot, 'bot.cmd.name.' + bot.cmdScope) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    }
+    if (v !== 'all' && v !== 'admin' && v !== 'off') {
+      return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.usage', { cur: t(bot, 'bot.cmd.name.' + bot.cmdScope) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    }
+    await settingSet(bot, 'config:cmd_scope', v);
+    bot.cmdScope = v;
+    const r = await applyCommandScope(bot);
+    if (!r.ok) {
+      return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.fail', { err: r.desc || 'unknown' }) + '\n' + t(bot, 'bot.cmd.usage', { cur: t(bot, 'bot.cmd.name.' + bot.cmdScope) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    }
+    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.set', { name: t(bot, 'bot.cmd.name.' + v) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+  }
+
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.usage'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
@@ -1976,34 +2116,52 @@ async function handleBroadcastCommand(bot, message) {
   let sentCount = 0, failCount = 0, skipCount = 0;
   try {
     const res = await bot.db.prepare('SELECT chat_id FROM chat_topic_mappings WHERE bot_id = ?').bind(bot.id).all();
-    const ids = res.results.map(r => r.chat_id);
-    // 兼容私聊模式用户：从消息映射中提取去重
+    // 兼容私聊模式用户：从消息映射中提取，用 Set 去重（避免 O(n²) 的 includes 判断）
     const maps = await bot.db.prepare('SELECT DISTINCT guest_chat_id AS chat_id FROM message_mappings WHERE bot_id = ?').bind(bot.id).all();
-    for (const m of maps.results) {
-      if (!ids.includes(m.chat_id)) ids.push(m.chat_id);
-    }
+    const idSet = new Set(res.results.map(r => String(r.chat_id)));
+    for (const m of maps.results) idSet.add(String(m.chat_id));
+    const ids = [...idSet];
 
     // 排除黑名单用户
     const blocked = await bot.db.prepare('SELECT chat_id FROM user_states WHERE bot_id = ? AND is_blocked = 1 AND is_trusted = 0').bind(bot.id).all();
     const blockedSet = new Set(blocked.results.map(r => String(r.chat_id)));
 
+    // 逐个发送：控制节奏（避免 Telegram 30 条/秒限流），并在接近 waitUntil 时限前主动收尾，
+    // 否则会被平台中途掐断，用户既收不到消息也拿不到准确结果。
+    const startedAt = Date.now();
+    let processed = 0;
+    let stoppedEarly = false;
     for (const userId of ids) {
+      if (Date.now() - startedAt > BROADCAST_TIME_BUDGET_MS) { stoppedEarly = true; break; }
+      processed++;
       if (String(userId) === String(bot.adminUid)) continue;
       if (blockedSet.has(String(userId))) { skipCount++; continue; }
       try {
-        await copyMessage(bot, {
+        const r = await copyMessage(bot, {
           chat_id: userId,
           from_chat_id: broadcastMsg.chat.id,
           message_id: broadcastMsg.message_id
         });
-        sentCount++;
+        // Telegram 失败时返回 {ok:false} 而非抛异常（如对方拉黑了机器人），必须显式判断
+        if (r && r.ok) sentCount++;
+        else {
+          failCount++;
+          console.error(`Broadcast rejected for ${userId}:`, r && r.description);
+          // 被限流时立刻停止，避免后续全部失败
+          if (r && r.error_code === 429) { stoppedEarly = true; break; }
+        }
       } catch (e) {
         console.error(`Broadcast failed for ${userId}:`, e);
         failCount++;
       }
+      await new Promise(resolve => setTimeout(resolve, BROADCAST_SEND_INTERVAL_MS));
     }
 
-    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'broadcast.done', { ok: sentCount, fail: failCount, skip: skipCount }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    let text = t(bot, 'broadcast.done', { ok: sentCount, fail: failCount, skip: skipCount });
+    if (stoppedEarly) {
+      text += t(bot, 'broadcast.partial', { n: Math.max(0, ids.length - processed) });
+    }
+    return sendMessage(bot, { chat_id: message.chat.id, text, parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   } catch (e) {
     return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'broadcast.error', { err: e.message }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   }
