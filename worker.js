@@ -5,7 +5,7 @@
 //   - 单机器人（默认）：设置 BOT_TOKEN / ADMIN_UID / SUPERGROUP_ID / TOPIC_MODE /
 //     WEBHOOK_SECRET / MAX_MSG_PER_MIN，id 为 "default"。
 //   - 多机器人：一律通过管理面板 /bot add 指令存入 D1（免 Cloudflare 操作），webhook 路径 /endpoint/{id}。
-//     每个机器人需单独访问 /registerWebhook/{id} 注册。
+//     每个机器人需单独访问 /registerWebhook/{id}?token=<该机器人token> 注册。
 
 const WEBHOOK = '/endpoint';
 const DEFAULT_BOT_ID = 'default';
@@ -182,7 +182,7 @@ const STRINGS = {
   'bot.add.exists': { zh: '⚠️ 机器人 <code>{id}</code> 已存在。', en: '⚠️ Bot <code>{id}</code> already exists.' },
   'bot.add.ok': { zh: '✅ 机器人 <code>{id}</code> ({name}) 已添加并自动注册 webhook，可直接使用。', en: '✅ Bot <code>{id}</code> ({name}) added and webhook auto-registered. Ready to use.' },
   'bot.add.fail': { zh: '❌ 添加失败（token 无效？）: {err}', en: '❌ Add failed (invalid token?): {err}' },
-  'bot.add.webhook_fail': { zh: '⚠️ 机器人 <code>{id}</code> 已保存，但 webhook 注册失败: {err}\n请稍后手动访问 /registerWebhook/{id}', en: '⚠️ Bot <code>{id}</code> saved but webhook registration failed: {err}\nVisit /registerWebhook/{id} manually later.' },
+  'bot.add.webhook_fail': { zh: '⚠️ 机器人 <code>{id}</code> 已保存，但 webhook 注册失败: {err}\n请稍后手动访问 /registerWebhook/{id}?token=<该机器人token>', en: '⚠️ Bot <code>{id}</code> saved but webhook registration failed: {err}\nVisit /registerWebhook/{id}?token=<bot token> manually later.' },
   'bot.del.usage': { zh: '用法: <code>/bot del id</code>', en: 'Usage: <code>/bot del id</code>' },
   'bot.del.self': { zh: '⚠️ 不能删除当前正在使用的机器人。', en: '⚠️ Cannot delete the bot you are using now.' },
   'bot.del.ok': { zh: '🗑 机器人 <code>{id}</code> 已删除并注销 webhook。', en: '🗑 Bot <code>{id}</code> deleted and webhook unregistered.' },
@@ -504,7 +504,9 @@ async function getUserState(bot, chatId) {
     pending_forward: null,
     first_card_sent: 0
   };
-  await bot.db.prepare(`INSERT INTO user_states (bot_id, chat_id, is_blocked, is_trusted, is_verified, verified_expiry,
+  // OR IGNORE：新用户同时发多条消息时，并发请求可能都查到无行并同时 INSERT，
+  // 不加 IGNORE 会让后到的那条因主键冲突抛异常，导致该消息整条处理链失败被丢弃
+  await bot.db.prepare(`INSERT OR IGNORE INTO user_states (bot_id, chat_id, is_blocked, is_trusted, is_verified, verified_expiry,
     is_rate_limited, message_count, window_start, pending_code_expiry, pending_attempts, first_card_sent)
     VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)`).bind(bot.id, def.chat_id).run();
   return def;
@@ -752,12 +754,14 @@ export default {
     if (p === '/registerWebhook' || (m = p.match(/^\/registerWebhook\/([A-Za-z0-9_-]+)$/))) {
       const bot = await resolveBot(env, m ? m[1] : DEFAULT_BOT_ID);
       if (!bot) return new Response('Unknown bot', { status: 404 });
+      if (!(await checkAdminToken(request, bot))) return new Response('Unauthorized', { status: 401 });
       const r = await autoRegisterWebhook(bot);
       return new Response('ok' in r && r.ok ? `Ok (${bot.id})` : JSON.stringify(r, null, 2));
     }
     if (p === '/unRegisterWebhook' || (m = p.match(/^\/unRegisterWebhook\/([A-Za-z0-9_-]+)$/))) {
       const bot = await resolveBot(env, m ? m[1] : DEFAULT_BOT_ID);
       if (!bot) return new Response('Unknown bot', { status: 404 });
+      if (!(await checkAdminToken(request, bot))) return new Response('Unauthorized', { status: 401 });
       return unRegisterWebhook(bot);
     }
     return new Response('No handler for this request');
@@ -1080,6 +1084,12 @@ async function handleGuestMessage(bot, message) {
 
   // 7. 被拦截 -> 验证挑战
   if (!allowed) {
+    // 暂存前必须先过关键词过滤：否则严格模式下垃圾文本可借"发广告→答题→补发"绕过。
+    // 命中关键词直接静默丢弃，不进入暂存队列。
+    if (message.text && !isTrusted) {
+      const words = keywords || await getKeywords(bot);
+      if (words.some(k => keywordHit(message.text, k))) return new Response('Ok');
+    }
     // 暂存被拦截的消息，验证通过后自动补转发，用户无需重发
     return sendVerificationChallenge(bot, chatId, message.message_id, {
       message_id: message.message_id,
@@ -1569,7 +1579,12 @@ async function handleUntrustCommand(bot, message) {
 async function handleBlockCommand(bot, message) {
   const userId = await getTargetUserId(bot, message);
   if (!userId) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'target.unknown'), message_thread_id: message.message_thread_id });
-  await setUserState(bot, userId, { is_blocked: 1, is_trusted: 0, is_verified: 0, verified_expiry: 0 });
+  // 与 README 语义对齐：屏蔽时一并清除打断中的验证状态与暂存消息（否则解封后旧暂存会被补发）
+  await setUserState(bot, userId, {
+    is_blocked: 1, is_trusted: 0, is_verified: 0, verified_expiry: 0,
+    pending_question: null, pending_answer: null, pending_code_expiry: 0,
+    pending_attempts: 0, pending_msg_id: 0, pending_forward: null
+  });
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'block.done', { uid: userId }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
 }
 
@@ -1601,12 +1616,13 @@ async function handleClearCommand(bot, message) {
   if (text === '/clear all') {
     await bot.db.prepare('DELETE FROM message_mappings WHERE bot_id = ?').bind(bot.id).run();
     await bot.db.prepare('DELETE FROM chat_topic_mappings WHERE bot_id = ?').bind(bot.id).run();
-    await settingDel(bot, 'pin:private');
-    // 一并清理历史卡片记录、屏蔽提示与建话题冷却，保持「清空全部」的语义
+    // 重置信息卡标记，用户再次来消息时重新发接入卡，符合「清空全部」语义
+    await bot.db.prepare('UPDATE user_states SET first_card_sent = 0 WHERE bot_id = ?').bind(bot.id).run();
+    // 清理屏蔽提示与建话题冷却，保持「清空全部」的语义
     // 注意 LIKE 'topic:last:%' 不会匹配全局的 topic:last_alert（它后面没有冒号）
     const leftovers = await bot.db.prepare(
       `SELECT key FROM settings WHERE bot_id = ?
-       AND (key LIKE 'pin:topic:%' OR key LIKE 'blockhint:%' OR key LIKE 'topic:last:%')`
+       AND (key LIKE 'blockhint:%' OR key LIKE 'topic:last:%')`
     ).bind(bot.id).all();
     for (const r of leftovers.results) await settingDel(bot, r.key);
     return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'clear.all.done'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
@@ -1616,6 +1632,8 @@ async function handleClearCommand(bot, message) {
   if (!userId) return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'target.unknown'), message_thread_id: message.message_thread_id });
   await bot.db.prepare('DELETE FROM message_mappings WHERE bot_id = ? AND guest_chat_id = ?').bind(bot.id, String(userId)).run();
   await bot.db.prepare('DELETE FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(userId)).run();
+  // 与 /clear all 一致：重置信息卡标记，该用户下次来消息重新发接入卡
+  await setUserState(bot, userId, { first_card_sent: 0 });
   await settingDel(bot, `blockhint:${userId}`);
   await settingDel(bot, `topic:last:${userId}`);
   return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'clear.user.done', { uid: userId }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
@@ -1712,8 +1730,11 @@ async function handleVerifyCommand(bot, message) {
   const sub = (parts[1] || '').toLowerCase();
   const opts = { chat_id: message.chat.id, message_thread_id: message.message_thread_id, parse_mode: 'HTML' };
   const reply = (txt) => sendMessage(bot, { ...opts, text: txt });
-  // 取指令名之后的正文
-  const restText = () => text.slice(parts[0].length + parts[1].length + 2).trim();
+  // 取指令名与子命令之后的正文（按前两个 token 切分，兼容指令与子命令之间的多个空格）
+  const restText = () => {
+    const m = /^(?:\S+\s+){2}([\s\S]*)$/.exec(text);
+    return m ? m[1].trim() : '';
+  };
   // 解析 "问题 | 答案"
   const parsePair = () => {
     const rest = restText();
@@ -1851,7 +1872,7 @@ async function handleLangCommand(bot, message) {
 
 async function handleWelcomeCommand(bot, message) {
   const text = message.text.trim();
-  const content = text.replace(/^\/welcome\s*/, '').trim();
+  const content = text.replace(/^\/welcome(?:@[A-Za-z0-9_]+)?\s*/, '').trim();
   if (content.toLowerCase() === 'reset') {
     await settingDel(bot, 'config:welcome');
     return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'welcome.reset'), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
@@ -2041,12 +2062,12 @@ async function handleBotCommand(bot, message) {
       const me = await requestTelegram(newBot, 'getMe', makeReqBody({}));
       if (!me.ok) {
         await bot.db.prepare('DELETE FROM bots WHERE bot_id = ?').bind(id).run();
-        resultText = t(bot, 'bot.add.fail', { err: me.description || 'invalid token' });
+        resultText = t(bot, 'bot.add.fail', { err: escapeHtml(me.description || 'invalid token') });
       } else {
         const r = await autoRegisterWebhook(newBot);
         resultText = r.ok
           ? t(bot, 'bot.add.ok', { id, name: '@' + (me.result.username || id) })
-          : t(bot, 'bot.add.webhook_fail', { id, err: r.description || 'unknown' });
+          : t(bot, 'bot.add.webhook_fail', { id, err: escapeHtml(r.description || 'unknown') });
       }
     }
     // 删除含 token 的原始消息（防泄露）
@@ -2093,12 +2114,17 @@ async function handleBotCommand(bot, message) {
     if (v !== 'all' && v !== 'admin' && v !== 'off') {
       return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.usage', { cur: t(bot, 'bot.cmd.name.' + bot.cmdScope) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
     }
-    await settingSet(bot, 'config:cmd_scope', v);
+    // 先实际生效、成功后才持久化：避免注册失败时 D1 里已存新档位，面板显示与实际菜单状态不一致
+    const prevScope = bot.cmdScope;
     bot.cmdScope = v;
     const r = await applyCommandScope(bot);
     if (!r.ok) {
-      return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.fail', { err: r.desc || 'unknown' }) + '\n' + t(bot, 'bot.cmd.usage', { cur: t(bot, 'bot.cmd.name.' + bot.cmdScope) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+      // applyCommandScope 会先清掉旧菜单，失败时按原档位恢复，避免菜单凭空消失
+      bot.cmdScope = prevScope;
+      await applyCommandScope(bot);
+      return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.fail', { err: escapeHtml(r.desc || 'unknown') }) + '\n' + t(bot, 'bot.cmd.usage', { cur: t(bot, 'bot.cmd.name.' + bot.cmdScope) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
     }
+    await settingSet(bot, 'config:cmd_scope', v);
     return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'bot.cmd.set', { name: t(bot, 'bot.cmd.name.' + v) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   }
 
@@ -2163,11 +2189,28 @@ async function handleBroadcastCommand(bot, message) {
     }
     return sendMessage(bot, { chat_id: message.chat.id, text, parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   } catch (e) {
-    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'broadcast.error', { err: e.message }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
+    return sendMessage(bot, { chat_id: message.chat.id, text: t(bot, 'broadcast.error', { err: escapeHtml(e.message) }), parse_mode: 'HTML', message_thread_id: message.message_thread_id });
   }
 }
 
 // ---------------- Webhook 注册 ----------------
+
+// registerWebhook / unRegisterWebhook 鉴权：worker 域名是公开的（转发消息里就带），
+// 未鉴权时任何人访问 unRegisterWebhook 即可注销 webhook 造成消息接收瘫痪（DoS）。
+// 以该机器人的 Bot Token 作为凭证：?token=<BOT_TOKEN>，与存储的 token 恒定时间比对。
+// Token 本就是部署者持有的秘密，无需额外配置环境变量。
+async function checkAdminToken(request, bot) {
+  const given = new URL(request.url).searchParams.get('token') || '';
+  if (!given || !bot.token) return false;
+  const enc = new TextEncoder();
+  const a = enc.encode(given);
+  const b = enc.encode(bot.token);
+  if (a.length !== b.length) return false;
+  // 逐字节异或累积差异，避免早退暴露前缀匹配信息
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
 
 async function unRegisterWebhook(bot) {
   const r = await (await fetch(apiUrl(bot, 'setWebhook', { url: '' }))).json();

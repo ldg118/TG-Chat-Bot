@@ -50,7 +50,9 @@ Create a D1 database (e.g. `tgchatbot`) and add a D1 binding in Settings → Bin
 
 ### Register the Webhook
 
-After deploying, visit once: `https://your-worker.workers.dev/registerWebhook` — an `Ok (default)` response means it works (`default` is the bot id).
+After deploying, visit once: `https://your-worker.workers.dev/registerWebhook?token=<YOUR_BOT_TOKEN>` — an `Ok (default)` response means it works (`default` is the bot id).
+
+> ⚠️ **Registration endpoints require the bot token**: the worker domain is public, so `/registerWebhook` and `/unRegisterWebhook` both demand `?token=<BOT_TOKEN>` (the respective bot's token in multi-bot setups) to prevent strangers from unregistering your webhook (a message-receive DoS). Missing/wrong token returns 401.
 
 The webhook receive path is `/endpoint` for a single bot, or `/endpoint/{id}` per bot in multi-bot setups (registration entry: `/registerWebhook/{id}`).
 
@@ -117,8 +119,8 @@ Use `/bot` commands inside the admin panel (`/admin`) — configs are stored in 
 **Notes:**
 
 - Invalid tokens are not saved; messages containing tokens are auto-deleted.
-- After changing a bot's `token`/`admin`, re-visit its `/registerWebhook/{id}`.
-- The `default` bot still needs one manual visit to `/registerWebhook`.
+- After changing a bot's `token`/`admin`, re-visit its `/registerWebhook/{id}?token=<that bot's token>`.
+- The `default` bot still needs one manual visit to `/registerWebhook?token=<BOT_TOKEN>`.
 
 ## Anti-Spam Details
 
@@ -156,7 +158,7 @@ Send `/admin` for the visual panel (tap-to-run buttons):
 - **/keyword list|add word|del word|reset** — manage keyword blacklist.
 - **/lang <zh|en>** — switch UI language.
 - **/welcome text** — custom `/start` welcome (supports `{uid}`); `/welcome reset` restores the default.
-- **/clear** — clear a user's mappings and topic binding; `/clear all` wipes everything.
+- **/clear** — clear a user's mappings and topic binding (also resets their info card); `/clear all` wipes everything.
 - **/mode <private|topic>** — switch operating mode.
 - **/bot list|add|del|set** — manage multiple bots (stored in D1, webhook auto-registered, no Cloudflare needed).
 - **/bot cmd <all|admin|off>** — command menu visibility (default `all`; `admin` = admin only; `off` = hidden), applied instantly, per bot.
@@ -195,7 +197,7 @@ Every table uses `bot_id` as the first primary-key column to isolate data betwee
 3.  **Create D1**: in the console (or `wrangler d1 create tgchatbot`).
 4.  **Deploy**: click the "Deploy to Cloudflare Workers" button above, or create a Worker and paste `worker.js`.
 5.  **Configure**: add the environment variables under Settings → Variables, and a D1 binding named **`D1`** under Settings → Bindings.
-6.  **Register Webhook**: visit `https://your-domain.workers.dev/registerWebhook`.
+6.  **Register Webhook**: visit `https://your-domain.workers.dev/registerWebhook?token=<BOT_TOKEN>`.
 7.  **(Optional) Cron**: add `0 0 * * *` under Triggers to clean expired dedupe hashes and reset expired verification state daily (permanent state such as blacklist/trust is never removed).
 
 ## Acknowledgements

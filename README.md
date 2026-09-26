@@ -50,7 +50,9 @@
 
 ### 注册 Webhook
 
-部署完成后访问一次：`https://你的-worker-域名.workers.dev/registerWebhook`，返回 `Ok (default)` 即成功（`default` 是机器人 id）。
+部署完成后访问一次：`https://你的-worker-域名.workers.dev/registerWebhook?token=<你的BOT_TOKEN>`，返回 `Ok (default)` 即成功（`default` 是机器人 id）。
+
+> ⚠️ **注册/注销端点需要 Bot Token 鉴权**：worker 域名是公开的，为防止陌生人访问 `/unRegisterWebhook` 导致消息接收瘫痪，`/registerWebhook` 与 `/unRegisterWebhook` 都必须带 `?token=<BOT_TOKEN>`（多机器人用对应机器人的 token）。缺失或错误返回 401。
 
 Webhook 接收路径为 `/endpoint`（单机器人）；多机器人各用 `/endpoint/{id}`，对应注册入口 `/registerWebhook/{id}`。
 
@@ -123,8 +125,8 @@ Webhook 接收路径为 `/endpoint`（单机器人）；多机器人各用 `/end
 **注意点：**
 
 - token 无效时不会保存；含 token 的消息会被自动删除防泄露
-- 改了某个机器人的 `token`/`admin` 后，重新访问它的 `/registerWebhook/{id}` 生效
-- `default` 机器人仍需手动访问一次 `/registerWebhook`
+- 改了某个机器人的 `token`/`admin` 后，重新访问它的 `/registerWebhook/{id}?token=<该机器人token>` 生效
+- `default` 机器人仍需手动访问一次 `/registerWebhook?token=<BOT_TOKEN>`
 
 ## 防骚扰功能详解
 
@@ -177,7 +179,7 @@ Webhook 接收路径为 `/endpoint`（单机器人）；多机器人各用 `/end
 - **/keyword list|add 词|del 词|reset**：管理关键词黑名单。
 - **/lang <zh|en>**：切换界面语言。
 - **/welcome 文本**：自定义用户 `/start` 欢迎语（支持 `{uid}` 占位符）；`/welcome reset` 恢复默认。
-- **/clear**：清除指定用户的消息映射与话题绑定；`/clear all` 清空全部。
+- **/clear**：清除指定用户的消息映射与话题绑定（并重置接入信息卡）；`/clear all` 清空全部。
 - **/mode <private|topic>**：切换运行模式。
 - **/bot list|add|del|set**：管理多个机器人（存入 D1 并自动注册 webhook，免 Cloudflare 操作）。
 - **/bot cmd <all|admin|off>**：命令菜单可见性（默认 `all`；`admin` 仅管理员可见；`off` 完全关闭），即时生效、按机器人独立。
@@ -216,7 +218,7 @@ Webhook 接收路径为 `/endpoint`（单机器人）；多机器人各用 `/end
 3.  **创建 D1**：控制台 D1 中新建数据库（或 `wrangler d1 create tgchatbot`）。
 4.  **部署**：点击上方的 "Deploy to Cloudflare Workers" 按钮，或在 Workers 控制台新建 Worker 后粘贴 `worker.js` 内容。
 5.  **配置**：Settings → Variables 填入环境变量；Settings → Bindings 添加 D1 绑定（**绑定名 `D1`**）。
-6.  **注册 Webhook**：访问 `https://你的域名.workers.dev/registerWebhook`。
+6.  **注册 Webhook**：访问 `https://你的域名.workers.dev/registerWebhook?token=<BOT_TOKEN>`。
 7.  **（可选）Cron**：Triggers 中添加每日定时 `0 0 * * *`，用于清理过期去重哈希并重置过期的验证状态（不清除黑名单/信任等永久状态）。
 
 ## 致谢与参考
