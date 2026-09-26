@@ -24,6 +24,7 @@ const BROADCAST_SEND_INTERVAL_MS = 40;
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const DEDUPE_TTL_SECONDS = 120; // 去重哈希 2 分钟过期（仅防短时刷屏，正常复述/确认不受影响）
 const TOPIC_CREATE_COOLDOWN = 600; // 同一用户建话题失败后冷却 10 分钟（防群级限流）
+const TOPIC_READY_RETRY_MS = [800, 1500, 2500]; // 新建话题后转发失败的退避重试间隔（话题线程就绪有短暂延迟，累计约 5 秒内多次尝试）
 const DEFAULT_LANG = 'zh';
 
 // 安全级别定义
@@ -669,8 +670,42 @@ function apiUrl(bot, methodName, params = null) {
   return `https://api.telegram.org/bot${bot.token}/${methodName}${query}`;
 }
 
-function requestTelegram(bot, methodName, body, params = null) {
-  return fetch(apiUrl(bot, methodName, params), body).then(r => r.json());
+// 统一 Telegram API 请求（借鉴 CTT 的 fetchWithRetry）：
+// - 网络异常/超时：指数退避重试最多 2 次，仍失败返回 {ok:false} 交由上层降级处理，不再抛异常炸掉整条消息链
+// - 429 限流：retry_after <= 3 秒时自动等待后重试；更长则原样返回（广播等调用方有自己的 429 停止逻辑）
+// - 业务失败（400 等 ok:false）：不重试，原样返回由上层判断（如话题 thread not found 有专门重试）
+const TG_REQUEST_TIMEOUT_MS = 5000;
+const TG_RETRY_BACKOFF_MS = [500, 1500];
+async function requestTelegram(bot, methodName, body, params = null) {
+  const url = apiUrl(bot, methodName, params);
+  for (let attempt = 0; ; attempt++) {
+    let res = null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TG_REQUEST_TIMEOUT_MS);
+      try {
+        res = await fetch(url, { ...body, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (e) {
+      if (attempt < TG_RETRY_BACKOFF_MS.length) {
+        await new Promise(r => setTimeout(r, TG_RETRY_BACKOFF_MS[attempt]));
+        continue;
+      }
+      return { ok: false, description: `Network error after ${attempt + 1} attempts: ${(e && e.message) || e}` };
+    }
+    let data;
+    try { data = await res.json(); } catch (e) { data = { ok: false, description: 'Invalid JSON response' }; }
+    if (res.status === 429 && data && data.ok === false) {
+      const ra = (data.parameters && data.parameters.retry_after) || parseInt(res.headers.get('Retry-After') || '0', 10);
+      if (ra > 0 && ra <= 3 && attempt < TG_RETRY_BACKOFF_MS.length) {
+        await new Promise(r => setTimeout(r, ra * 1000));
+        continue;
+      }
+    }
+    return data;
+  }
 }
 
 function makeReqBody(body) {
@@ -1129,7 +1164,7 @@ async function ensureTopicFor(bot, chatId, message, now) {
 
 async function ensureTopicInner(bot, chatId, message, now) {
   const row = await bot.db.prepare('SELECT topic_id FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).first();
-  if (row) return { topicId: row.topic_id, degraded: false };
+  if (row) return { topicId: row.topic_id, degraded: false, fresh: false };
 
   // 冷却期内不再尝试建话题（防群级限流），本条降级到管理员私聊
   const lastTry = parseInt((await settingGet(bot, `topic:last:${chatId}`)) || '0');
@@ -1150,7 +1185,8 @@ async function ensureTopicInner(bot, chatId, message, now) {
       .bind(bot.id, String(chatId), topicId).run();
     await settingDel(bot, `topic:last:${chatId}`);
     await sendFirstCard(bot, { chatId, message, topicMode: true, topicId });
-    return { topicId, degraded: false };
+    // fresh=true：话题刚创建，线程可能有短暂就绪延迟，转发失败时应先重试而不是清映射
+    return { topicId, degraded: false, fresh: true };
   }
 
   console.error('Create topic failed:', JSON.stringify(topicRes));
@@ -1168,6 +1204,18 @@ async function ensureTopicInner(bot, chatId, message, now) {
     });
   }
   return { topicId: null, degraded: true };
+}
+
+// 向"刚建好/刚重建"的话题转发：线程就绪有短暂延迟，按退避节奏对同一话题最多重试 3 次。
+// 只对 thread/topic not found 类错误重试，其他错误（如拉黑）立即返回交上层处理。
+async function copyWithTopicRetry(bot, forwardBody) {
+  let res = await copyMessage(bot, forwardBody);
+  for (const wait of TOPIC_READY_RETRY_MS) {
+    if (res.ok || !/thread|topic|not found/i.test(res.description || '')) break;
+    await new Promise(resolve => setTimeout(resolve, wait));
+    res = await copyMessage(bot, forwardBody);
+  }
+  return res;
 }
 
 // 转发用户消息到管理端（话题/私聊模式通用），供正常流程与验证后补发复用
@@ -1188,11 +1236,13 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
     }
   }
 
+  let freshTopic = false;
   if (bot.topicMode && bot.supergroupId) {
     forwardChatId = bot.supergroupId;
     // 话题创建加锁 + 冷却（参考 CTT topicCreationLocks）：并发消息只建一次话题
     const r = await ensureTopicFor(bot, chatId, message, now);
     topicId = r.topicId;
+    freshTopic = !!r.fresh;
     if (r.degraded) forwardChatId = bot.adminUid;
   }
 
@@ -1204,17 +1254,33 @@ async function forwardGuestMessage(bot, chatId, message, state, now) {
   };
   if (topicId) forwardBody.message_thread_id = parseInt(topicId);
 
-  let forwardReq = await copyMessage(bot, forwardBody);
+  let forwardReq = freshTopic
+    ? await copyWithTopicRetry(bot, forwardBody)
+    : await copyMessage(bot, forwardBody);
 
-  // 话题模式下转发失败且带话题映射：话题可能已被手动删除 -> 清映射（下次消息按冷却规则重建），本条降级到管理员私聊
-  if (!forwardReq.ok && bot.topicMode && bot.supergroupId && topicId) {
+  // 话题模式下转发失败且错误明确指向话题不存在（被手动删除/关闭）-> 清掉失效映射并当场重建话题，
+  // 本条消息转发进新话题（而不是甩到管理员私聊）；重建或再转发仍失败才降级私聊兜底。
+  // 其他失败（如用户拉黑机器人）保留映射，仅本条走下方告警，避免误清刚建好的话题导致下一条重建。
+  if (!forwardReq.ok && bot.topicMode && bot.supergroupId && topicId && /thread|topic/i.test(forwardReq.description || '')) {
     await bot.db.prepare('DELETE FROM chat_topic_mappings WHERE bot_id = ? AND chat_id = ?').bind(bot.id, String(chatId)).run();
     await setUserState(bot, chatId, { first_card_sent: 0 });
-    forwardChatId = bot.adminUid;
-    topicId = null;
-    delete forwardBody.message_thread_id;
-    forwardBody.chat_id = forwardChatId;
-    forwardReq = await copyMessage(bot, forwardBody);
+    // ensureTopicFor 建新话题时会在话题内发信息卡（sendFirstCard 内部读库防重复）
+    const rebuilt = await ensureTopicFor(bot, chatId, message, now);
+    if (rebuilt.topicId && !rebuilt.degraded) {
+      topicId = rebuilt.topicId;
+      forwardChatId = bot.supergroupId;
+      forwardBody.chat_id = forwardChatId;
+      forwardBody.message_thread_id = parseInt(topicId);
+      forwardReq = await copyWithTopicRetry(bot, forwardBody);
+    }
+    if (!forwardReq.ok) {
+      // 重建失败或新话题仍不可写：本条降级到管理员私聊，映射留给下一条消息按冷却规则重建
+      topicId = null;
+      forwardChatId = bot.adminUid;
+      delete forwardBody.message_thread_id;
+      forwardBody.chat_id = forwardChatId;
+      forwardReq = await copyMessage(bot, forwardBody);
+    }
   }
 
   if (forwardReq.ok) {
